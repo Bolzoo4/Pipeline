@@ -91,19 +91,27 @@ def segment_real(image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         with torch.no_grad():
             outputs = model(**inputs)
 
-        # Extract masks directly from model output (avoid version-specific post_process_masks)
-        pred_masks = outputs.pred_masks  # [batch, num_masks, H, W] or similar
-        scores = outputs.iou_scores[0].cpu().numpy().flatten()
+        # Extract masks directly from model output
+        pred_masks = outputs.pred_masks  # shape varies by version
+        iou_scores = outputs.iou_scores
 
-        # Get best mask by IoU score
-        best_idx = scores.argmax()
+        # Flatten everything and pick best mask
+        # pred_masks shape: [batch, num_multimask, H', W'] or [batch, 1, num_multimask, H', W']
+        masks_flat = pred_masks[0]  # remove batch dim
+        while masks_flat.ndim > 3:
+            masks_flat = masks_flat.squeeze(0)
+        # Now masks_flat is [num_masks, H', W'] or [H', W']
+        if masks_flat.ndim == 2:
+            masks_flat = masks_flat.unsqueeze(0)
 
-        # Extract the mask tensor and resize to original image dimensions
-        mask_tensor = pred_masks[0, best_idx]  # may have extra dims
-        while mask_tensor.ndim > 2:
-            mask_tensor = mask_tensor[0]
+        scores_flat = iou_scores.flatten().cpu().numpy()
+        num_masks = masks_flat.shape[0]
 
-        # Resize to original image size via bilinear interpolation
+        # Clamp index to available masks
+        best_idx = min(int(scores_flat.argmax()), num_masks - 1)
+        mask_tensor = masks_flat[best_idx]  # [H', W']
+
+        # Resize to original image size
         mask_resized = torch.nn.functional.interpolate(
             mask_tensor.unsqueeze(0).unsqueeze(0).float(),
             size=(h, w),
@@ -111,10 +119,9 @@ def segment_real(image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
             align_corners=False,
         ).squeeze()
 
-        # Threshold to binary mask
         binary_mask = (mask_resized > 0).cpu().numpy().astype(np.uint8) * 255
 
-        print(f"   ✓ SAM2 mask: {np.sum(binary_mask > 0)} fg pixels (score: {scores[best_idx]:.3f})")
+        print(f"   ✓ SAM2 mask: {np.sum(binary_mask > 0)} fg px (score: {scores_flat[best_idx]:.3f}, masks: {num_masks})")
 
         del model, processor
         torch.cuda.empty_cache()
