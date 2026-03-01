@@ -77,8 +77,9 @@ def segment_real(image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         h, w = image.shape[:2]
 
         # Use a center point prompt (jewelry is typically centered in catalog photos)
-        input_points = [[[w // 2, h // 2]]]  # center of image
-        input_labels = [[1]]  # foreground
+        # SAM2 needs 4 levels: [image_level, object_level, point_level, coordinates]
+        input_points = [[[[w // 2, h // 2]]]]
+        input_labels = [[[1]]]  # foreground
 
         inputs = processor(
             images=pil_img,
