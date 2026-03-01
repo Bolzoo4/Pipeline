@@ -41,13 +41,12 @@ def alpha_from_trimap_real(image: np.ndarray, trimap: np.ndarray) -> np.ndarray:
         )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
     processor = VitMatteImageProcessor.from_pretrained("hustvl/vitmatte-small-composition-1k")
+    # Load in float32 — fp16 causes dtype mismatch with processor outputs
     model = VitMatteForImageMatting.from_pretrained(
         "hustvl/vitmatte-small-composition-1k",
-        torch_dtype=dtype,
-    ).to(device)
+    ).to(device).eval()
 
     # Convert BGR→RGB PIL Image
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -59,7 +58,12 @@ def alpha_from_trimap_real(image: np.ndarray, trimap: np.ndarray) -> np.ndarray:
     inputs = {k: v.to(device) for k, v in inputs.items()}
 
     with torch.no_grad():
-        outputs = model(**inputs)
+        # Use autocast for GPU acceleration without dtype issues
+        if device == "cuda":
+            with torch.autocast(device_type="cuda"):
+                outputs = model(**inputs)
+        else:
+            outputs = model(**inputs)
 
     # Extract alpha
     alpha = outputs.alphas.squeeze().cpu().numpy()
