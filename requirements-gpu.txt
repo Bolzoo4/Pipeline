@@ -1,11 +1,31 @@
-# GPU Requirements for RunPod / Cloud GPU
+# GPU Requirements — Multi-View 3D Reconstruction Pipeline
 --extra-index-url https://download.pytorch.org/whl/cu121
+
+# Core
 torch
 torchvision
-transformers
+
+# Multi-view generation
 diffusers
+transformers
 accelerate
 safetensors
+
+# Background removal
+rembg
+onnxruntime-gpu
+
+# 3D Reconstruction
+scikit-image
+scipy
+
+# Mesh processing
+open3d
+xatlas
+trimesh
+pygltflib
+
+# Image processing
 opencv-python-headless
 Pillow
 numpy

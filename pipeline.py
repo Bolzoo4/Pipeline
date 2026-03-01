@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
 """
-Jewelry Asset Pipeline — CLI orchestrator.
+Jewelry Asset Pipeline — Multi-View 3D Reconstruction.
 
-Processes a catalog image through 5 stages to produce a UV-mapped asset bundle:
-  1. Segmentation (SAM2 / GrabCut)
-  2. Alpha Matting (ViTMatte)
-  3. Normal Estimation (Marigold)
-  4. PBR Heuristics (Roughness + Metallic)
-  5. Toroidal UV Unwrap → final UV-mapped textures
+Processes a jewelry catalog image (or multi-view set) through a full 3D
+reconstruction pipeline to produce a textured .glb model.
+
+Pipeline Stages:
+  1. Multi-view generation (Zero123++ from single image, or real photos)
+  2. 3D Reconstruction (visual hull carving + marching cubes)
+  3. Mesh processing (smooth, simplify, UV unwrap)
+  4. Texture baking (project views → UV maps + PBR)
+  5. Export .glb
 
 Usage:
-    python pipeline.py --input ring.jpg --output ./output_bundle/
-    python pipeline.py --input ring.jpg --output ./output_bundle/ --mock
-    python pipeline.py --input ring.jpg --output ./output_bundle/ --real -c ring
+    # Single image → AI multiview → 3D
+    python pipeline.py -i ring.jpg -o ./bundle/ --real -c ring
+
+    # Real multi-view photos
+    python pipeline.py -i views/ -o ./bundle/ --real -c ring --multiview
+
+    # Mock mode (no GPU, synthetic data)
+    python pipeline.py -i ring.jpg -o ./bundle/ --mock -c ring
 """
 
 import json
@@ -24,154 +32,225 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from stages import segmentation, alpha_matting, normal_estimation, pbr_heuristics, uv_unwrap
+from stages import multiview_gen, reconstruction, mesh_processing, texture_baking
 
 
 def save_webp(image: np.ndarray, path: Path, quality: int = 90) -> int:
     """Save image as WebP. Returns file size in bytes."""
     if len(image.shape) == 2:
         pil_img = Image.fromarray(image, mode="L")
+    elif image.shape[2] == 4:
+        pil_img = Image.fromarray(image, mode="RGBA")
     else:
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(rgb)
+        pil_img = Image.fromarray(image)
     pil_img.save(str(path), "WEBP", quality=quality)
     return path.stat().st_size
 
 
+def export_glb(mesh_data: dict, textures: dict, output_path: Path) -> int:
+    """
+    Export mesh + textures as .glb file.
+    Uses trimesh if available, otherwise a minimal manual GLB.
+    """
+    try:
+        import trimesh
+
+        vertices = mesh_data.get('original_vertices', mesh_data['vertices'])
+        faces = mesh_data.get('original_faces', mesh_data['faces'])
+        uv_coords = mesh_data.get('uv_coords')
+
+        # Create trimesh
+        mesh = trimesh.Trimesh(
+            vertices=vertices.astype(np.float64),
+            faces=faces.astype(np.int64),
+        )
+
+        # Add UV coordinates as a visual
+        if uv_coords is not None and len(uv_coords) > 0:
+            # Create a texture image from the albedo
+            albedo = textures.get('albedo')
+            if albedo is not None:
+                albedo_pil = Image.fromarray(albedo)
+
+                # Create material with the albedo texture
+                material = trimesh.visual.material.PBRMaterial(
+                    baseColorTexture=albedo_pil,
+                    metallicFactor=0.9,
+                    roughnessFactor=0.3,
+                )
+
+                # Create TextureVisuals
+                mesh.visual = trimesh.visual.TextureVisuals(
+                    uv=uv_coords[:len(vertices)],
+                    material=material,
+                )
+
+        # Export as GLB
+        glb_data = mesh.export(file_type='glb')
+        output_path.write_bytes(glb_data)
+
+        size = output_path.stat().st_size
+        print(f"   ✓ GLB exported ({size / 1024:.1f}KB, "
+              f"{len(vertices):,} verts, {len(faces):,} faces)")
+        return size
+
+    except ImportError:
+        print("   ⚠ trimesh not available, saving OBJ instead")
+        return _export_obj(mesh_data, output_path.with_suffix('.obj'))
+
+
+def _export_obj(mesh_data: dict, output_path: Path) -> int:
+    """Fallback: export as .obj file."""
+    vertices = mesh_data.get('original_vertices', mesh_data['vertices'])
+    faces = mesh_data.get('original_faces', mesh_data['faces'])
+
+    with open(output_path, 'w') as f:
+        for v in vertices:
+            f.write(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n")
+        for face in faces:
+            f.write(f"f {face[0]+1} {face[1]+1} {face[2]+1}\n")
+
+    size = output_path.stat().st_size
+    print(f"   ✓ OBJ exported ({size / 1024:.1f}KB)")
+    return size
+
+
 @click.command()
 @click.option("--input", "-i", "input_path", required=True, type=click.Path(exists=True),
-              help="Path to the catalog image (JPEG/PNG)")
+              help="Single image or directory of multi-view photos")
 @click.option("--output", "-o", "output_dir", required=True, type=click.Path(),
               help="Output directory for the asset bundle")
 @click.option("--category", "-c", default="ring",
               type=click.Choice(["ring", "earring", "necklace", "bracelet", "watch"]),
               help="Jewelry category")
 @click.option("--mock/--real", default=True,
-              help="Use mock mode (no GPU required) or real AI models")
+              help="Use mock mode (no GPU) or real AI models")
+@click.option("--multiview", is_flag=True, default=False,
+              help="Input is a directory of multi-view photos")
 @click.option("--quality", default=90, type=int,
-              help="WebP compression quality (0-100)")
-@click.option("--uv-width", default=1024, type=int,
-              help="UV texture width")
-@click.option("--uv-height", default=512, type=int,
-              help="UV texture height")
+              help="Texture quality (0-100)")
+@click.option("--grid-size", default=128, type=int,
+              help="Voxel grid resolution (32-256)")
+@click.option("--texture-size", default=1024, type=int,
+              help="Output texture resolution")
+@click.option("--target-faces", default=5000, type=int,
+              help="Target face count for mesh simplification")
 def main(input_path: str, output_dir: str, category: str, mock: bool,
-         quality: int, uv_width: int, uv_height: int):
-    """Process a jewelry catalog image into a UV-mapped PBR asset bundle."""
+         multiview: bool, quality: int, grid_size: int, texture_size: int,
+         target_faces: int):
+    """Process jewelry images into a textured 3D model (.glb)."""
     input_path = Path(input_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     mode_label = "MOCK" if mock else "REAL (GPU)"
+    input_mode = "MULTI-VIEW" if multiview else "SINGLE IMAGE → AI MULTIVIEW"
     click.echo(f"🔧 Pipeline mode: {mode_label}")
+    click.echo(f"📸 Input mode: {input_mode}")
     click.echo(f"💎 Category: {category}")
     click.echo(f"📸 Input: {input_path}")
     click.echo(f"📦 Output: {output_dir}")
-    click.echo(f"🗺️  UV size: {uv_width}×{uv_height}")
-    click.echo("─" * 50)
-
-    # Load input image
-    image = cv2.imread(str(input_path))
-    if image is None:
-        raise click.ClickException(f"Failed to load image: {input_path}")
-
-    h, w = image.shape[:2]
-    click.echo(f"📐 Image size: {w}×{h}")
+    click.echo(f"🧊 Grid: {grid_size}³ | 🎨 Tex: {texture_size}px | 🔺 Target: {target_faces} faces")
+    click.echo("─" * 60)
 
     total_start = time.time()
+
+    # ─── Stage 1: Get multi-view images ───
+    click.echo("\n📸 Stage 1/5: Multi-View Generation...")
+    t = time.time()
+
+    if multiview:
+        # Load real photos from directory
+        if input_path.is_dir():
+            image_files = sorted(
+                p for p in input_path.iterdir()
+                if p.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp')
+            )
+            click.echo(f"   ℹ Found {len(image_files)} photos")
+            views = multiview_gen.load_real_multiview([str(p) for p in image_files])
+        else:
+            raise click.ClickException("--multiview requires a directory of images")
+    else:
+        # Single image → generate multi-view
+        image = cv2.imread(str(input_path))
+        if image is None:
+            raise click.ClickException(f"Failed to load: {input_path}")
+        click.echo(f"   📐 Image: {image.shape[1]}×{image.shape[0]}")
+        views = multiview_gen.generate_multiview(image, mock=mock)
+
+    num_views = len(views)
+    cameras = multiview_gen.get_camera_matrices(num_views)
+    click.echo(f"   ✓ {num_views} views generated ({time.time() - t:.2f}s)")
+
+    # Save views for debugging
+    views_dir = output_dir / "views"
+    views_dir.mkdir(exist_ok=True)
+    for i, view in enumerate(views):
+        cv2.imwrite(str(views_dir / f"view_{i:02d}.png"),
+                    cv2.cvtColor(view, cv2.COLOR_RGB2BGR))
+
+    # ─── Stage 2: 3D Reconstruction ───
+    click.echo("\n🧊 Stage 2/5: 3D Reconstruction...")
+    t = time.time()
+    recon = reconstruction.run(views, cameras, grid_size=grid_size, mock=mock)
+    click.echo(f"   ✓ Reconstruction complete ({time.time() - t:.2f}s)")
+
+    # ─── Stage 3: Mesh Processing ───
+    click.echo("\n✨ Stage 3/5: Mesh Processing...")
+    t = time.time()
+    mesh_data = mesh_processing.run(
+        recon['vertices'], recon['faces'],
+        smooth_iterations=15,
+        target_faces=target_faces,
+    )
+    click.echo(f"   ✓ Mesh processing complete ({time.time() - t:.2f}s)")
+
+    # ─── Stage 4: Texture Baking ───
+    click.echo("\n🎨 Stage 4/5: Texture Baking...")
+    t = time.time()
+    textures = texture_baking.run(mesh_data, views, cameras, texture_size=texture_size)
+    click.echo(f"   ✓ Texture baking complete ({time.time() - t:.2f}s)")
+
+    # ─── Stage 5: Export ───
+    click.echo("\n💾 Stage 5/5: Export...")
+    t = time.time()
     bundle_size = 0
 
-    # Stage 1: Segmentation → Trimap
-    click.echo("\n🔍 Stage 1/5: Segmentation...")
-    t = time.time()
-    mask, trimap = segmentation.run(image, mock=mock)
-    click.echo(f"   ✓ Segmentation complete ({time.time() - t:.2f}s)")
+    # Export GLB
+    glb_size = export_glb(mesh_data, textures, output_dir / "model.glb")
+    bundle_size += glb_size
 
-    # Stage 2: Alpha Matting
-    click.echo("🎭 Stage 2/5: Alpha Matting...")
-    t = time.time()
-    alpha = alpha_matting.run(image, trimap, mock=mock)
-    click.echo(f"   ✓ Alpha matting complete ({time.time() - t:.2f}s)")
-
-    # Stage 3: Normal Estimation
-    click.echo("🗺️  Stage 3/5: Normal Map...")
-    t = time.time()
-    normals = normal_estimation.run(image, alpha, mock=mock)
-    click.echo(f"   ✓ Normal estimation complete ({time.time() - t:.2f}s)")
-
-    # Stage 4: PBR Heuristics
-    click.echo("✨ Stage 4/5: PBR Maps (Roughness + Metallic)...")
-    t = time.time()
-    roughness, metallic = pbr_heuristics.run(image, alpha)
-    click.echo(f"   ✓ PBR heuristics complete ({time.time() - t:.2f}s)")
-
-    # Stage 5: Toroidal UV Unwrap
-    click.echo("🔄 Stage 5/5: Toroidal UV Unwrap...")
-    t = time.time()
-    uv_bundle = uv_unwrap.run(
-        image, mask, alpha, normals, roughness, metallic,
-        uv_width=uv_width, uv_height=uv_height, mock=mock,
-    )
-    click.echo(f"   ✓ UV unwrap complete ({time.time() - t:.2f}s)")
-
-    # Save UV-mapped textures
-    click.echo("\n💾 Saving UV-mapped bundle...")
-
-    # Albedo (with alpha channel)
-    uv_albedo = uv_bundle['albedo']
-    uv_alpha = uv_bundle['alpha']
-    albedo_rgb = cv2.cvtColor(uv_albedo, cv2.COLOR_BGR2RGB)
-    if uv_alpha.ndim == 2:
-        albedo_rgba = np.dstack([albedo_rgb, uv_alpha])
-    else:
-        albedo_rgba = np.dstack([albedo_rgb, uv_alpha[:, :, 0]])
-    pil_albedo = Image.fromarray(albedo_rgba, mode="RGBA")
-    albedo_path = output_dir / "albedo.webp"
-    pil_albedo.save(str(albedo_path), "WEBP", quality=quality)
-    bundle_size += albedo_path.stat().st_size
-    click.echo(f"   ✓ UV albedo ({albedo_path.stat().st_size / 1024:.1f}KB)")
-
-    # Normal
-    size = save_webp(uv_bundle['normal'], output_dir / "normal.webp", quality)
-    bundle_size += size
-    click.echo(f"   ✓ UV normal ({size / 1024:.1f}KB)")
-
-    # Roughness
-    size = save_webp(uv_bundle['roughness'], output_dir / "roughness.webp", quality)
-    bundle_size += size
-    click.echo(f"   ✓ UV roughness ({size / 1024:.1f}KB)")
-
-    # Metallic
-    size = save_webp(uv_bundle['metallic'], output_dir / "metallic.webp", quality)
-    bundle_size += size
-    click.echo(f"   ✓ UV metallic ({size / 1024:.1f}KB)")
-
-    # Alpha (separate for the renderer)
-    size = save_webp(uv_bundle['alpha'], output_dir / "alpha.webp", quality)
-    bundle_size += size
-    click.echo(f"   ✓ UV alpha ({size / 1024:.1f}KB)")
+    # Save textures as WebP (for web viewer fallback)
+    for name in ['albedo', 'roughness', 'metallic', 'normal']:
+        tex = textures.get(name)
+        if tex is not None:
+            size = save_webp(tex, output_dir / f"{name}.webp", quality)
+            bundle_size += size
+            click.echo(f"   ✓ {name}.webp ({size / 1024:.1f}KB)")
 
     # Save metadata
-    geom = uv_bundle.get('geometry', {})
     metadata = {
-        "version": "2.0.0",
-        "uv_mapping": "toroidal",
+        "version": "3.0.0",
+        "format": "glb",
         "category": category,
-        "source_image": input_path.name,
-        "dimensions": {"width": w, "height": h},
-        "uv_dimensions": {"width": uv_width, "height": uv_height},
+        "source": str(input_path.name),
+        "input_mode": "multiview" if multiview else "single_to_multiview",
         "pipeline_mode": "mock" if mock else "real",
-        "quality": quality,
+        "num_views": num_views,
+        "mesh": {
+            "vertices": int(len(mesh_data.get('original_vertices', mesh_data['vertices']))),
+            "faces": int(len(mesh_data.get('original_faces', mesh_data['faces']))),
+        },
+        "textures": {
+            "size": texture_size,
+            "quality": quality,
+        },
         "files": {
+            "model": "model.glb",
             "albedo": "albedo.webp",
-            "alpha": "alpha.webp",
-            "normal": "normal.webp",
             "roughness": "roughness.webp",
             "metallic": "metallic.webp",
-        },
-        "ring_geometry": {
-            "center": geom.get('center', [0, 0]),
-            "outer_radius": geom.get('outer_radius', 0),
-            "inner_radius": geom.get('inner_radius', 0),
+            "normal": "normal.webp",
         },
         "bundle_size_bytes": bundle_size,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -179,12 +258,13 @@ def main(input_path: str, output_dir: str, category: str, mock: bool,
 
     meta_path = output_dir / "metadata.json"
     meta_path.write_text(json.dumps(metadata, indent=2))
+    click.echo(f"   ✓ Export complete ({time.time() - t:.2f}s)")
 
     total_time = time.time() - total_start
-    click.echo("─" * 50)
+    click.echo("─" * 60)
     click.echo(f"✅ Pipeline complete in {total_time:.2f}s")
     click.echo(f"📦 Bundle size: {bundle_size / 1024:.1f}KB")
-    click.echo(f"🔄 UV mapping: toroidal ({uv_width}×{uv_height})")
+    click.echo(f"🧊 Model: model.glb ({glb_size / 1024:.1f}KB)")
     click.echo(f"📁 Output: {output_dir}")
 
 
