@@ -2,19 +2,6 @@
 # ═══════════════════════════════════════════════════════════════
 # Gioielli Pipeline — RunPod GPU Setup Script
 # ═══════════════════════════════════════════════════════════════
-#
-# How to use:
-# 1. Go to runpod.io → Pods → Create Pod
-# 2. Select a GPU: RTX A4000 ($0.20/hr) or RTX 3090 ($0.31/hr) 
-#    or A100 ($1.64/hr) — any NVIDIA GPU with ≥16GB VRAM works
-# 3. Select template: "RunPod Pytorch 2.1" (or any with CUDA 12.x)
-# 4. Start the pod
-# 5. Connect via SSH or Web Terminal
-# 6. Upload this script + your jewelry images
-# 7. Run: bash setup_runpod.sh
-# 8. Run: python pipeline.py --input YOUR_IMAGE.jpg --output ./bundle/ --real
-#
-# ═══════════════════════════════════════════════════════════════
 
 set -e
 
@@ -28,23 +15,13 @@ echo "🔍 Checking GPU..."
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 echo ""
 
-# ─── 2. Install dependencies ───
+# ─── 2. Install dependencies via requirements file ───
 echo "📦 Installing Python dependencies..."
-pip install --upgrade pip
-pip install \
-    torch torchvision --index-url https://download.pytorch.org/whl/cu121 \
-    transformers>=4.40.0 \
-    diffusers>=0.28.0 \
-    accelerate>=0.28.0 \
-    safetensors>=0.4.0 \
-    opencv-python-headless>=4.9.0 \
-    Pillow>=10.2.0 \
-    numpy>=1.26.0 \
-    click>=8.1.0
+pip install -r requirements-gpu.txt
 
 echo "✅ Dependencies installed"
 
-# ─── 3. Pre-download models (so pipeline doesn't wait) ───
+# ─── 3. Pre-download models ───
 echo ""
 echo "📥 Pre-downloading AI models (this takes ~5-10 min first time)..."
 
@@ -77,15 +54,6 @@ echo ""
 echo "═══════════════════════════════════════════════"
 echo "✅ Setup complete! Run the pipeline with:"
 echo ""
-echo "  python pipeline.py --input PHOTO.jpg --output ./bundle/ --real -c ring"
+echo "  python pipeline.py -i PHOTO.jpg -o ./bundle/ --real -c ring"
 echo ""
-echo "Options:"
-echo "  -c ring|earring|necklace|bracelet|watch"
-echo "  --quality 90   (WebP quality, 0-100)"
-echo ""
-echo "Example with multiple images:"
-echo "  for img in images/*.jpg; do"
-echo "    name=\$(basename \$img .jpg)"
-echo "    python pipeline.py -i \$img -o ./bundles/\$name/ --real -c ring"
-echo "  done"
 echo "═══════════════════════════════════════════════"
