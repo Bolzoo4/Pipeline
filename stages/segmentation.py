@@ -91,26 +91,30 @@ def segment_real(image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         with torch.no_grad():
             outputs = model(**inputs)
 
-        # Get masks and scores
-        masks = processor.post_process_masks(
-            outputs.pred_masks,
-            inputs["original_sizes"],
-            inputs["reshaped_input_sizes"],
-        )
+        # Extract masks directly from model output (avoid version-specific post_process_masks)
+        pred_masks = outputs.pred_masks  # [batch, num_masks, H, W] or similar
+        scores = outputs.iou_scores[0].cpu().numpy().flatten()
 
-        if not masks or len(masks[0]) == 0:
-            raise ValueError("SAM2 found no masks")
-
-        # Take the mask with highest IoU score
-        scores = outputs.iou_scores[0].cpu().numpy()
+        # Get best mask by IoU score
         best_idx = scores.argmax()
-        binary_mask = masks[0][best_idx].squeeze().cpu().numpy().astype(np.uint8) * 255
 
-        # Ensure it's 2D
-        if binary_mask.ndim == 3:
-            binary_mask = binary_mask[0]
+        # Extract the mask tensor and resize to original image dimensions
+        mask_tensor = pred_masks[0, best_idx]  # may have extra dims
+        while mask_tensor.ndim > 2:
+            mask_tensor = mask_tensor[0]
 
-        print(f"   ✓ SAM2 mask: {np.sum(binary_mask > 0)} foreground pixels (score: {scores.flatten()[best_idx]:.3f})")
+        # Resize to original image size via bilinear interpolation
+        mask_resized = torch.nn.functional.interpolate(
+            mask_tensor.unsqueeze(0).unsqueeze(0).float(),
+            size=(h, w),
+            mode="bilinear",
+            align_corners=False,
+        ).squeeze()
+
+        # Threshold to binary mask
+        binary_mask = (mask_resized > 0).cpu().numpy().astype(np.uint8) * 255
+
+        print(f"   ✓ SAM2 mask: {np.sum(binary_mask > 0)} fg pixels (score: {scores[best_idx]:.3f})")
 
         del model, processor
         torch.cuda.empty_cache()
