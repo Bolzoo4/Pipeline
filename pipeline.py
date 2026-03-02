@@ -67,14 +67,17 @@ def create_mock_glb(output_path: Path) -> int:
               help="Diffusion steps for multi-view generation (more = better quality)")
 @click.option("--seed", default=42, type=int,
               help="Random seed")
+@click.option("--multiview", default="zero123",
+              type=click.Choice(["zero123", "nanobanana"]),
+              help="Engine to generate multi-view images")
 def main(input_path: str, output_dir: str, category: str, mock: bool,
-         quality: int, steps: int, seed: int):
-    """Jewelry → 3D Model Pipeline (InstantMesh)."""
+         quality: int, steps: int, seed: int, multiview: str):
+    """Jewelry → 3D Model Pipeline (InstantMesh/NanoBanana)."""
     input_path = Path(input_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    mode_label = "MOCK" if mock else "REAL (GPU)"
+    mode_label = "MOCK" if mock else f"REAL (GPU) - {multiview.upper()}"
     click.echo(f"🔧 Pipeline mode: {mode_label}")
     click.echo(f"💎 Category: {category}")
     click.echo(f"📸 Input: {input_path}")
@@ -104,19 +107,69 @@ def main(input_path: str, output_dir: str, category: str, mock: bool,
         click.echo(f"   ✓ Preprocessed ({time.time() - t:.2f}s)")
 
         # ─── Stage 2: InstantMesh 3D Reconstruction ───
-        click.echo(f"\n🚀 Stage 2/4: InstantMesh 3D ({steps} steps)...")
+        click.echo(f"\n🚀 Stage 2/4: 3D Reconstruction ({multiview})...")
         t = time.time()
 
-        from stages.instantmesh_stage import run as run_instantmesh, convert_to_glb
+        from stages.instantmesh_stage import convert_to_glb, ensure_setup
 
-        result = run_instantmesh(
-            str(processed_path),
-            str(output_dir),
-            export_texmap=True,
-            diffusion_steps=steps,
-            seed=seed,
-        )
-        click.echo(f"   ✓ InstantMesh complete ({time.time() - t:.2f}s)")
+        ensure_setup()
+        
+        # Result dictionary to hold outputs
+        result = {}
+        
+        if multiview == "nanobanana":
+            from stages.nanobanana_multiview import generate_multiview_grid
+            import subprocess
+            import sys
+            import os
+            
+            grid_path = str(output_dir / "multiview_grid.png")
+            click.echo("   [1/2] Generating Multiview Grid with Vertex AI (NanoBanana)...")
+            generate_multiview_grid(str(processed_path), grid_path, category=category)
+            
+            click.echo("   [2/2] Extracting 3D Mesh with LRM...")
+            lrm_dir = output_dir / "instantmesh" / "lrm_output"
+            lrm_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Setup InstantMesh env
+            INSTANTMESH_DIR = "/workspace/InstantMesh"
+            env = os.environ.copy()
+            env["PYTHONPATH"] = INSTANTMESH_DIR + ":" + env.get("PYTHONPATH", "")
+            
+            lrm_script = str(Path("stages/run_lrm_only.py").absolute())
+            cmd = [
+                sys.executable, lrm_script,
+                os.path.join(INSTANTMESH_DIR, "configs", "instant-mesh-large.yaml"),
+                grid_path,
+                str(lrm_dir)
+            ]
+            
+            proc = subprocess.run(cmd, cwd=INSTANTMESH_DIR, env=env, capture_output=True, text=True)
+            if proc.returncode != 0:
+                print(f"   ⚠ LRM failed:\n{proc.stderr}")
+                raise RuntimeError(f"LRM Extraction failed (exit {proc.returncode})")
+            
+            # Find generated mesh (named multiview_grid.obj)
+            mesh_path = str(lrm_dir / "multiview_grid.obj")
+            tex_path = str(lrm_dir / "multiview_grid.png")
+            
+            result = {
+                "mesh_path": mesh_path,
+                "texture_map": tex_path if os.path.exists(tex_path) else None,
+                "multiview_image": grid_path
+            }
+        else:
+            # Traditional InstantMesh (Zero123++)
+            from stages.instantmesh_stage import run as run_instantmesh
+            result = run_instantmesh(
+                str(processed_path),
+                str(output_dir),
+                export_texmap=True,
+                diffusion_steps=steps,
+                seed=seed,
+            )
+            
+        click.echo(f"   ✓ 3D Reconstruction complete ({time.time() - t:.2f}s)")
 
         # ─── Stage 3: Texture Enhancement ───
         click.echo("\n✨ Stage 3/4: Texture Enhancement...")
