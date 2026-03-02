@@ -41,7 +41,7 @@ echo "  ✅ pip upgraded"
 # ─── 5. Pipeline core deps ───
 echo ""
 echo "📦 Pipeline core deps..."
-pip install click Pillow numpy opencv-python-headless trimesh pygltflib 2>&1 | tail -1
+pip install click Pillow numpy opencv-python-headless trimesh pygltflib onnxruntime-gpu 2>&1 | tail -1
 echo "  ✅ Pipeline deps OK"
 
 # ─── 6. Clone InstantMesh ───
