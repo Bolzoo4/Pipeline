@@ -63,8 +63,8 @@ def create_mock_glb(output_path: Path) -> int:
               help="Mock mode (no GPU/AI) or real mode")
 @click.option("--quality", default=90, type=int,
               help="Texture quality (0-100)")
-@click.option("--steps", default=75, type=int,
-              help="Diffusion steps for multi-view generation")
+@click.option("--steps", default=100, type=int,
+              help="Diffusion steps for multi-view generation (more = better quality)")
 @click.option("--seed", default=42, type=int,
               help="Random seed")
 def main(input_path: str, output_dir: str, category: str, mock: bool,
@@ -93,14 +93,24 @@ def main(input_path: str, output_dir: str, category: str, mock: bool,
         multiview_image = None
         texture_path = None
     else:
-        # ─── Real mode: InstantMesh ───
-        click.echo("\n🚀 Stage 1/2: InstantMesh 3D Reconstruction...")
+        # ─── Stage 1: Preprocess input ───
+        click.echo("\n🖼️  Stage 1/4: Preprocessing input...")
+        t = time.time()
+
+        from stages.texture_enhance import preprocess_input, upscale_texture, enhance_texture
+
+        processed_path = output_dir / "input_processed.png"
+        preprocess_input(str(input_path), str(processed_path), target_size=1024)
+        click.echo(f"   ✓ Preprocessed ({time.time() - t:.2f}s)")
+
+        # ─── Stage 2: InstantMesh 3D Reconstruction ───
+        click.echo(f"\n🚀 Stage 2/4: InstantMesh 3D ({steps} steps)...")
         t = time.time()
 
         from stages.instantmesh_stage import run as run_instantmesh, convert_to_glb
 
         result = run_instantmesh(
-            str(input_path),
+            str(processed_path),
             str(output_dir),
             export_texmap=True,
             diffusion_steps=steps,
@@ -108,8 +118,28 @@ def main(input_path: str, output_dir: str, category: str, mock: bool,
         )
         click.echo(f"   ✓ InstantMesh complete ({time.time() - t:.2f}s)")
 
-        # ─── Stage 2: Convert to GLB ───
-        click.echo("\n💾 Stage 2/2: Export GLB...")
+        # ─── Stage 3: Texture Enhancement ───
+        click.echo("\n✨ Stage 3/4: Texture Enhancement...")
+        t = time.time()
+
+        texture_path = result.get("texture_map")
+        if texture_path and Path(texture_path).exists():
+            # Enhance texture (sharpen, contrast, color)
+            enhanced_path = str(Path(texture_path).parent / "texture_enhanced.png")
+            enhance_texture(texture_path, enhanced_path)
+
+            # Upscale texture 2x (Real-ESRGAN if available, PIL fallback)
+            upscaled_path = str(Path(texture_path).parent / "texture_upscaled.png")
+            upscale_texture(enhanced_path, upscaled_path, scale=2, method="auto")
+
+            # Use the upscaled texture for GLB conversion
+            result["texture_map"] = upscaled_path
+            click.echo(f"   ✓ Texture enhanced + upscaled ({time.time() - t:.2f}s)")
+        else:
+            click.echo("   ⚠ No texture map to enhance")
+
+        # ─── Stage 4: Export GLB ───
+        click.echo("\n💾 Stage 4/4: Export GLB...")
         t = time.time()
 
         glb_path = output_dir / "model.glb"
