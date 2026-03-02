@@ -15,6 +15,9 @@ pygltflib
 # ─── Background removal (rembg) ───
 onnxruntime-gpu
 
+# ─── Vertex AI / NanoBanana Pro ───
+google-genai
+
 # ─── InstantMesh dependencies ───
 # (installed separately via InstantMesh/requirements.txt)
 # diffusers, transformers, accelerate, einops, omegaconf,

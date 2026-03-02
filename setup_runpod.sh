@@ -9,6 +9,11 @@
 # Requires: ~6GB disk space for models
 # ═══════════════════════════════════════════════════════════════
 
+# Nano Banana Pro (Gemini 3) / Vertex AI Environment
+export GOOGLE_CLOUD_PROJECT="virtual-try-on-488619"
+export GOOGLE_CLOUD_LOCATION="europe-west1"
+export GOOGLE_GENAI_USE_VERTEXAI="True"
+
 set -e
 
 echo "═══════════════════════════════════════════════"
@@ -41,7 +46,7 @@ echo "  ✅ pip upgraded"
 # ─── 5. Pipeline core deps ───
 echo ""
 echo "📦 Pipeline core deps..."
-pip install click Pillow numpy opencv-python-headless trimesh pygltflib onnxruntime-gpu 2>&1 | tail -1
+pip install click Pillow numpy opencv-python-headless trimesh pygltflib onnxruntime-gpu google-genai 2>&1 | tail -1
 echo "  ✅ Pipeline deps OK"
 
 # ─── 6. Clone InstantMesh ───
