@@ -1,26 +1,50 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════
-# Gioielli Pipeline v4 — RunPod GPU Setup (InstantMesh)
+# Gioielli Pipeline v4.1 — RunPod One-Shot Setup
+#
+# Run this ONCE after starting a fresh RunPod instance:
+#   cd /workspace && bash pipeline/setup_runpod.sh
+#
+# Tested on: RunPod PyTorch 2.4.1 template (Python 3.11, CUDA 12.4)
+# Requires: ~6GB disk space for models
 # ═══════════════════════════════════════════════════════════════
 
 set -e
 
 echo "═══════════════════════════════════════════════"
-echo "💎 Gioielli Pipeline v4 — InstantMesh Setup"
+echo "💎 Gioielli Pipeline v4.1 — Setup"
 echo "═══════════════════════════════════════════════"
 
-# ─── 1. Check GPU ───
+# ─── 1. GPU check ───
 echo ""
-echo "🔍 Checking GPU..."
-nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+echo "🔍 GPU check..."
+nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader
 echo ""
 
 # ─── 2. System deps ───
-echo "📦 Installing system deps..."
+echo "📦 System deps..."
 apt-get update -qq && apt-get install -y -qq libgl1-mesa-glx libglib2.0-0 > /dev/null 2>&1
-echo "✅ System deps installed"
+echo "  ✅ System deps OK"
 
-# ─── 3. Clone InstantMesh ───
+# ─── 3. Fix blinker (breaks pip on some RunPod images) ───
+echo ""
+echo "🔧 Fixing blinker..."
+rm -rf /usr/lib/python3/dist-packages/blinker* /usr/lib/python3.11/dist-packages/blinker* 2>/dev/null || true
+echo "  ✅ blinker cleaned"
+
+# ─── 4. Upgrade pip ───
+echo ""
+echo "📦 Upgrading pip..."
+pip install --upgrade pip > /dev/null 2>&1
+echo "  ✅ pip upgraded"
+
+# ─── 5. Pipeline core deps ───
+echo ""
+echo "📦 Pipeline core deps..."
+pip install click Pillow numpy opencv-python-headless trimesh pygltflib 2>&1 | tail -1
+echo "  ✅ Pipeline deps OK"
+
+# ─── 6. Clone InstantMesh ───
 echo ""
 if [ -d "/workspace/InstantMesh" ]; then
     echo "✅ InstantMesh already cloned"
@@ -28,60 +52,97 @@ else
     echo "📥 Cloning InstantMesh..."
     cd /workspace
     git clone https://github.com/TencentARC/InstantMesh.git
-    echo "✅ InstantMesh cloned"
+    echo "  ✅ InstantMesh cloned"
 fi
+cd /workspace
 
-# ─── 4. Install dependencies ───
+# ─── 7. Install ninja (needed for nvdiffrast) ───
 echo ""
-echo "📦 Installing dependencies..."
+echo "📦 Installing ninja..."
+pip install ninja 2>&1 | tail -1
+echo "  ✅ ninja OK"
 
-# Pipeline base deps
-pip install click trimesh pygltflib Pillow opencv-python-headless numpy 2>&1 | tail -1
+# ─── 8. Install nvdiffrast (needs special flag) ───
+echo ""
+echo "📦 Installing nvdiffrast..."
+pip install git+https://github.com/NVlabs/nvdiffrast/ --no-build-isolation 2>&1 | tail -1
+echo "  ✅ nvdiffrast OK"
 
-# InstantMesh deps
+# ─── 9. Install InstantMesh deps (skip nvdiffrast line) ───
+echo ""
+echo "📦 Installing InstantMesh deps..."
 cd /workspace/InstantMesh
-pip install -r requirements.txt 2>&1 | tail -5
+grep -v nvdiffrast requirements.txt | pip install -r /dev/stdin 2>&1 | tail -3
+echo "  ✅ InstantMesh deps OK"
 
-# Fix blinker if needed
-rm -rf /usr/lib/python3/dist-packages/blinker* 2>/dev/null || true
-
-echo "✅ Dependencies installed"
-
-# ─── 5. Pre-download models ───
+# ─── 10. Pin compatible versions (avoid huggingface/transformers conflicts) ───
 echo ""
-echo "📥 Pre-downloading models (this takes a few minutes)..."
+echo "📦 Pinning compatible versions..."
+pip install \
+    'huggingface_hub==0.21.4' \
+    'transformers==4.37.2' \
+    'diffusers==0.27.2' \
+    'accelerate==0.28.0' \
+    2>&1 | tail -1
+echo "  ✅ Versions pinned"
 
+# ─── 11. Verify imports ───
+echo ""
+echo "🧪 Verifying imports..."
+cd /workspace
 python3 -c "
+import torch, rembg, diffusers, xatlas, trimesh
+import nvdiffrast
+from einops import rearrange
+from omegaconf import OmegaConf
+print(f'  PyTorch:    {torch.__version__}')
+print(f'  CUDA:       {torch.cuda.is_available()}')
+print(f'  GPU:        {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')
+print(f'  diffusers:  {diffusers.__version__}')
+print('  ✅ All imports OK')
+"
+
+# ─── 12. Pre-download models (optional, saves time on first run) ───
+echo ""
+read -p "📥 Pre-download models (~4GB)? [Y/n] " answer
+answer=${answer:-Y}
+if [[ "$answer" =~ ^[Yy]$ ]]; then
+    echo "📥 Downloading models (this takes 3-5 minutes)..."
+    python3 -c "
 from huggingface_hub import hf_hub_download
 
-print('  📥 Downloading InstantMesh UNet weights...')
+print('  📥 InstantMesh UNet...')
 hf_hub_download(repo_id='TencentARC/InstantMesh', filename='diffusion_pytorch_model.bin', repo_type='model')
 
-print('  📥 Downloading InstantMesh LRM weights...')
+print('  📥 InstantMesh LRM (large)...')
 hf_hub_download(repo_id='TencentARC/InstantMesh', filename='instant_mesh_large.ckpt', repo_type='model')
 
-print('  📥 Downloading Zero123++ model...')
+print('  📥 Zero123++ v1.2...')
 from diffusers import DiffusionPipeline
 import torch
 pipe = DiffusionPipeline.from_pretrained('sudo-ai/zero123plus-v1.2', custom_pipeline='zero123plus', torch_dtype=torch.float16)
 del pipe
 
-print('  📥 Downloading rembg model...')
+print('  📥 rembg u2net...')
 from rembg import new_session
-session = new_session('u2net')
-del session
+s = new_session('u2net')
+del s
 
-print()
-print('🎉 All models downloaded!')
+print('  ✅ All models downloaded!')
 "
+fi
 
+# ─── Done ───
 echo ""
 echo "═══════════════════════════════════════════════"
 echo "✅ Setup complete!"
 echo ""
-echo "Usage:"
-echo "  python pipeline.py -i photo.jpg -o ./bundle/ --real -c ring"
+echo "📋 Quick start:"
+echo "  cd /workspace/pipeline"
+echo "  python pipeline.py -i /workspace/test_ring.jpg -o /workspace/output/ --real -c ring"
 echo ""
-echo "  # Mock mode (no GPU)"
-echo "  python pipeline.py -i photo.jpg -o ./bundle/ --mock -c ring"
+echo "📋 Options:"
+echo "  --steps 100     Diffusion steps (default 100, more = better)"
+echo "  --seed 42       Random seed"
+echo "  --mock           Skip GPU, test flow only"
 echo "═══════════════════════════════════════════════"

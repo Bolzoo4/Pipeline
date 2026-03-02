@@ -1,32 +1,19 @@
-# GPU Requirements — Multi-View 3D Reconstruction Pipeline
---extra-index-url https://download.pytorch.org/whl/cu121
+# Pipeline v4.1 — GPU Requirements
+# Tested on RunPod PyTorch 2.4.1 template (Python 3.11, CUDA 12.4)
+# ──────────────────────────────────────────────────────────────
 
-# Core
-torch
-torchvision
+# ─── Pipeline core ───
+click
+Pillow
+numpy
+opencv-python-headless
 
-# Multi-view generation
-diffusers
-transformers
-accelerate
-safetensors
-
-# Background removal
-rembg
-onnxruntime-gpu
-
-# 3D Reconstruction
-scikit-image
-scipy
-
-# Mesh processing
-open3d
-xatlas
+# ─── 3D mesh ───
 trimesh
 pygltflib
 
-# Image processing
-opencv-python-headless
-Pillow
-numpy
-click
+# ─── InstantMesh dependencies ───
+# (installed separately via InstantMesh/requirements.txt)
+# diffusers, transformers, accelerate, einops, omegaconf,
+# pytorch-lightning, xatlas, rembg, nvdiffrast, etc.
+# See setup_runpod.sh for the full install procedure.
