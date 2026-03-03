@@ -104,12 +104,14 @@ def generate_multiview_grid(input_image_path: str, output_image_path: str, categ
                 generated_views[idx] = None
 
     # Second attempt: Sequential (slow but bypasses 429 concurrency limits)
+    # The preview models often have a very low RPM (Requests Per Minute)
     for idx, img in enumerate(generated_views):
         if img is None:
-            print(f"   ℹ Retrying {views_spec[idx]['name']} sequentially...")
+            print(f"   ℹ Quota hit earlier. Waiting 10s before retrying {views_spec[idx]['name']}...")
             try:
-                time.sleep(2) # Small cooldown
+                time.sleep(10) # Increased delay for strict preview limits
                 generated_views[idx] = generate_single_view(client, input_img, views_spec[idx]["name"], views_spec[idx]["az"], views_spec[idx]["el"], category)
+                print(f"   ✓ Successfully recovered {views_spec[idx]['name']}")
             except Exception as e:
                 print(f"   ⚠ Retry failed for {views_spec[idx]['name']}: {e}")
                 generated_views[idx] = Image.new('RGB', (320, 320), (255, 255, 255))
