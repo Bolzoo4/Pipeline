@@ -50,20 +50,31 @@ def get_view_prompt(view_name: str, azimuth_deg: int, elevation_deg: int, catego
         f"Generate ONLY the image of the object from this new 3D perspective."
     )
 
-def generate_single_view(client, image_part, view_name: str, azimuth: int, elevation: int, category: str = "jewelry", model="gemini-3-pro-image-preview"):
-    """Call Gemini to generate a single view from the reference image."""
-    prompt = get_view_prompt(view_name, azimuth, elevation, category)
+def generate_single_view(client, input_img, view_name: str, azimuth: int, elevation: int, category: str = "jewelry", model="gemini-3.1-flash-image-preview"):
+    """Call Gemini 3.1 Flash (Experimental) to generate a single view from the reference image."""
+    from google.genai.types import GenerateContentConfig, Modality
     
-    print(f"   [NanoBanana] Generating {view_name} (Az:{azimuth}, El:{elevation})...")
+    prompt = (
+        f"You are a professional 3D product photographer. Generate a high-resolution, photorealistic "
+        f"{view_name} view of the SAME {category} shown in the reference image. "
+        f"CRITICAL: Rotate the object or the camera so that we see it from an angle of "
+        f"AZIMUTH={azimuth} degrees and ELEVATION={elevation} degrees relative to the FRONT view. "
+        f"Keep the materials (gold, diamonds), textures, and lighting IDENTICAL to the source. "
+        f"The object must be perfectly centered on a pure white background (#FFFFFF) with NO shadows or floor. "
+        f"Generate ONLY the image of the object from this new 3D perspective."
+    )
+    
+    print(f"   [NanoBanana] Generating {view_name} (Az:{azimuth}, El:{elevation}) using GEMINI 3.1 FLASH...")
+    
     response = client.models.generate_content(
         model=model,
         contents=[
-            image_part,
+            input_img,
             prompt
         ],
         config=GenerateContentConfig(
             response_modalities=[Modality.IMAGE],
-            temperature=0.4, # Added a bit of temperature to encourage deviation from the input 
+            temperature=0.5, # Slightly higher to encourage rotation
         ),
     )
     
@@ -112,7 +123,7 @@ def generate_multiview_grid(input_image_path: str, output_image_path: str, categ
             executor.submit(
                 generate_single_view, 
                 client, 
-                input_img, 
+                input_img,  # Pass the PIL Image object for Gemini
                 spec["name"], 
                 spec["az"], 
                 spec["el"], 
