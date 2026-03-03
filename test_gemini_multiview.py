@@ -47,7 +47,7 @@ def run_test():
             output_image_path=output_grid,
             category="jewelry",
             project_id=os.environ.get("GOOGLE_CLOUD_PROJECT", "virtual-try-on-488619"),
-            location=os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+            location=os.environ.get("GOOGLE_CLOUD_LOCATION", "europe-west1")
         )
         print(f"✅ SUCCESS! Grid saved to: {output_grid}")
     except Exception as e:

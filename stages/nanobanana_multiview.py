@@ -88,7 +88,7 @@ def generate_single_view(client, input_img, view_name: str, azimuth: int, elevat
             
     raise ValueError(f"No image returned for view {view_name}")
 
-def generate_multiview_grid(input_image_path: str, output_image_path: str, category: str = "jewelry", project_id: str = None, location: str = "us-central1"):
+def generate_multiview_grid(input_image_path: str, output_image_path: str, category: str = "jewelry", project_id: str = None, location: str = "europe-west1"):
     """Generates 6 views and stitches them into a 640x960 grid."""
     
     # Initialize Vertex AI Client (assumes GOOGLE_APPLICATION_CREDENTIALS or gcloud auth is setup)
