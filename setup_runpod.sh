@@ -123,10 +123,13 @@ print('  📥 InstantMesh LRM (large)...')
 hf_hub_download(repo_id='TencentARC/InstantMesh', filename='instant_mesh_large.ckpt', repo_type='model')
 
 print('  📥 Zero123++ v1.2...')
-from diffusers import DiffusionPipeline
-import torch
-pipe = DiffusionPipeline.from_pretrained('sudo-ai/zero123plus-v1.2', custom_pipeline='zero123plus', torch_dtype=torch.float16)
-del pipe
+try:
+    from diffusers import DiffusionPipeline
+    import torch
+    pipe = DiffusionPipeline.from_pretrained('sudo-ai/zero123plus-v1.2', custom_pipeline='zero123plus', torch_dtype=torch.float16)
+    del pipe
+except Exception as e:
+    print(f'  ⚠ Zero123++ download skipped (not critical for NanoBanana): {e}')
 
 print('  📥 rembg u2net...')
 from rembg import new_session
