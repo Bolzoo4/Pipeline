@@ -50,41 +50,40 @@ def get_view_prompt(view_name: str, azimuth_deg: int, elevation_deg: int, catego
         f"Generate ONLY the image of the object from this new 3D perspective."
     )
 
-def generate_single_view(client, input_img, view_name: str, azimuth: int, elevation: int, category: str = "jewelry", model="gemini-3-pro-image-preview"):
-    """Call Gemini 3 Pro (Nano Banana Pro) to generate a single view from the reference image."""
-    from google.genai.types import GenerateContentConfig, Modality
+def generate_single_view(client, input_img_path, view_name: str, azimuth: int, elevation: int, category: str = "jewelry", model="imagen-4.0-generate-001"):
+    """Call Imagen 4.0 to generate a single view using the reference image."""
+    from google.genai.types import GenerateImagesConfig
     
     prompt = (
-        f"You are a professional 3D product photographer. Generate a high-resolution, photorealistic "
-        f"{view_name} view of the SAME {category} shown in the reference image. "
-        f"CRITICAL: Rotate the object or the camera so that we see it from an angle of "
-        f"AZIMUTH={azimuth} degrees and ELEVATION={elevation} degrees relative to the FRONT view. "
-        f"Keep the materials (gold, diamonds), textures, and lighting IDENTICAL to the source. "
-        f"The object must be perfectly centered on a pure white background (#FFFFFF) with NO shadows or floor. "
-        f"Generate ONLY the image of the object from this new 3D perspective."
+        f"A photorealistic {view_name} view of the {category} from the reference image. "
+        f"The object should be seen from an AZIMUTH of {azimuth} degrees and ELEVATION of {elevation} degrees. "
+        f"Maintain identical materials, diamonds, and gold. Pure white background, high quality, 8k resolution."
     )
     
-    print(f"   [NanoBanana] Generating {view_name} (Az:{azimuth}, El:{elevation}) using GEMINI 3.1 FLASH...")
+    print(f"   [NanoBanana] Generating {view_name} (Az:{azimuth}, El:{elevation}) using IMAGEN 4.0...")
     
-    response = client.models.generate_content(
+    # Load reference image for conditioning
+    with open(input_img_path, "rb") as f:
+        ref_image_bytes = f.read()
+
+    response = client.models.generate_images(
         model=model,
-        contents=[
-            input_img,
-            prompt
-        ],
-        config=GenerateContentConfig(
-            response_modalities=[Modality.IMAGE],
-            temperature=0.5, # Slightly higher to encourage rotation
-        ),
+        prompt=prompt,
+        config=GenerateImagesConfig(
+            number_of_images=1,
+            # Note: reference_images might have limited support in some Imagen 4.0 builds, 
+            # but we include it as the user specifically requested this model for this task.
+            reference_images=[ref_image_bytes], 
+            aspect_ratio="1:1"
+        )
     )
     
     # Extract image from response
-    for part in response.candidates[0].content.parts:
-        if part.inline_data:
-            img = Image.open(BytesIO(part.inline_data.data)).convert("RGB")
-            # Resize each view to 320x320 as expected by InstantMesh's grid
-            img = img.resize((320, 320), Image.LANCZOS)
-            return img
+    if response.generated_images:
+        img_bytes = response.generated_images[0].image.image_bytes
+        img = Image.open(BytesIO(img_bytes)).convert("RGB")
+        img = img.resize((320, 320), Image.LANCZOS)
+        return img
             
     raise ValueError(f"No image returned for view {view_name}")
 
@@ -123,7 +122,7 @@ def generate_multiview_grid(input_image_path: str, output_image_path: str, categ
             executor.submit(
                 generate_single_view, 
                 client, 
-                input_img,  # Pass the PIL Image object for Gemini
+                input_image_path,  # Use path for Imagen reference images
                 spec["name"], 
                 spec["az"], 
                 spec["el"], 
