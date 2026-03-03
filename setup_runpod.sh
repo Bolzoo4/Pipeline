@@ -11,7 +11,7 @@
 
 # Nano Banana Pro (Gemini 3) / Vertex AI Environment
 export GOOGLE_CLOUD_PROJECT="virtual-try-on-488619"
-export GOOGLE_CLOUD_LOCATION="europe-west1"
+export GOOGLE_CLOUD_LOCATION="us-central1"
 export GOOGLE_GENAI_USE_VERTEXAI="True"
 
 set -e
