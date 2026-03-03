@@ -50,46 +50,78 @@ def get_view_prompt(view_name: str, azimuth_deg: int, elevation_deg: int, catego
         f"Generate ONLY the image of the object from this new 3D perspective."
     )
 
-def generate_single_view(client, input_img, view_name: str, azimuth: int, elevation: int, category: str = "jewelry", model="gemini-3-pro-image-preview"):
-    """Call Gemini 3 Pro (Nano Banana Pro) to generate a single view from the reference image."""
-    from google.genai.types import GenerateContentConfig, Modality
+def generate_single_view(client, input_img, view_name: str, azimuth: int, elevation: int, category: str = "jewelry", model="gemini-3.1-flash-image-preview"):
+    """
+    Call Gemini (or Imagen fallback) to generate a single view.
+    Handles 404 by falling back to a more stable model.
+    """
+    from google.genai.types import GenerateContentConfig, Modality, GenerateImagesConfig
     
-    prompt = (
-        f"You are a professional 3D product photographer. Generate a high-resolution, photorealistic "
-        f"{view_name} view of the SAME {category} shown in the reference image. "
-        f"CRITICAL: Rotate the object or the camera so that we see it from an angle of "
-        f"AZIMUTH={azimuth} degrees and ELEVATION={elevation} degrees relative to the FRONT view. "
-        f"Keep the materials (gold, diamonds), textures, and lighting IDENTICAL to the source. "
-        f"The object must be perfectly centered on a pure white background (#FFFFFF) with NO shadows or floor. "
-        f"Generate ONLY the image of the object from this new 3D perspective."
-    )
+    # Try Gemini 3 (Nano Banana) or Flash if possible
+    # Fallback list: [User's choice, Stable Gemini, Stable Imagen]
+    models_to_try = [model, "gemini-2.0-flash-001", "imagen-3.0-generate-002"]
     
-    print(f"   [NanoBanana] Generating {view_name} (Az:{azimuth}, El:{elevation})...")
+    last_error = None
     
-    response = client.models.generate_content(
-        model=model,
-        contents=[
-            input_img,
-            prompt
-        ],
-        config=GenerateContentConfig(
-            response_modalities=[Modality.IMAGE],
-            temperature=0.5, # Slightly higher to encourage rotation
-        ),
-    )
-    
-    # Extract image from response
-    for part in response.candidates[0].content.parts:
-        if part.inline_data:
-            img = Image.open(BytesIO(part.inline_data.data)).convert("RGB")
-            # Resize each view to 320x320 as expected by InstantMesh's grid
-            img = img.resize((320, 320), Image.LANCZOS)
-            return img
+    for current_model in models_to_try:
+        try:
+            # If it's a Gemini model
+            if "gemini" in current_model:
+                prompt = (
+                    f"A photorealistic {view_name} view of the {category} from the reference image. "
+                    f"Rotate to AZIMUTH={azimuth} and ELEVATION={elevation}. "
+                    f"Pure white background, high quality."
+                )
+                print(f"   [NanoBanana] Trying {current_model} for {view_name}...")
+                
+                response = client.models.generate_content(
+                    model=current_model,
+                    contents=[input_img, prompt],
+                    config=GenerateContentConfig(response_modalities=[Modality.IMAGE])
+                )
+                
+                for part in response.candidates[0].content.parts:
+                    if part.inline_data:
+                        img = Image.open(BytesIO(part.inline_data.data)).convert("RGB")
+                        return img.resize((320, 320), Image.LANCZOS)
             
-    raise ValueError(f"No image returned for view {view_name}")
+            # If it's an Imagen model
+            elif "imagen" in current_model:
+                print(f"   [NanoBanana] Falling back to {current_model} for {view_name}...")
+                # Improved specific prompt for jewelry rotation
+                prompt = (
+                    f"High-resolution studio photo of a {category} from a {view_name} perspective "
+                    f"(Azimuth {azimuth}°, Elevation {elevation}°). "
+                    f"Centered, pure white background #FFFFFF, no shadows, 8k resolution, photorealistic."
+                )
+                response = client.models.generate_images(
+                    model=current_model,
+                    prompt=prompt,
+                    config=GenerateImagesConfig(number_of_images=1)
+                )
+                if response.generated_images:
+                    img_bytes = response.generated_images[0].image.image_bytes
+                    img = Image.open(BytesIO(img_bytes)).convert("RGB")
+                    return img.resize((320, 320), Image.LANCZOS)
+                    
+        except Exception as e:
+            last_error = e
+            error_str = str(e).lower()
+            if "404" in error_str or "not found" in error_str:
+                print(f"   ⚠ {current_model} not found (404). Trying next...")
+                continue
+            if "429" in error_str or "quota" in error_str:
+                raise e # Escalated to grid level for sequential retry
+            print(f"   ⚠ Error with {current_model}: {e}. Trying next...")
+            continue
+            
+    raise last_error or ValueError(f"Failed to generate view {view_name}")
 
-def generate_multiview_grid(input_image_path: str, output_image_path: str, category: str = "jewelry", project_id: str = None, location: str = "europe-west1"):
-    """Generates 6 views and stitches them into a 640x960 grid."""
+def generate_multiview_grid(input_image_path: str, output_image_path: str, category: str = "jewelry", project_id: str = None, location: str = "us-central1"):
+    """
+    Generates 6 views and stitches them into a grid.
+    Uses sequential fallback if parallel calls hit a quota.
+    """
     
     # Initialize Vertex AI Client (assumes GOOGLE_APPLICATION_CREDENTIALS or gcloud auth is setup)
     # The new SDK uses GOOGLE_CLOUD_PROJECT + GOOGLE_GENAI_USE_VERTEXAI
@@ -113,11 +145,15 @@ def generate_multiview_grid(input_image_path: str, output_image_path: str, categ
         {"name": "front-left low",   "az": 330, "el": -10}  # View 5
     ]
     
-    print(f"   ℹ Querying Nano Banana Pro (Gemini 3) for 6 views in parallel...")
+    print(f"   ℹ Multiview generation starting (Location: {location})...")
     start_time = time.time()
     
     # Run all 6 queries in parallel
     generated_views = [None] * 6
+    
+    # First attempt: Parallel (fast)
+    # If we get 429, we might have hit a per-minute limit.
+    hit_quota = False
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
         future_to_idx = {
             executor.submit(
@@ -135,12 +171,30 @@ def generate_multiview_grid(input_image_path: str, output_image_path: str, categ
         for future in concurrent.futures.as_completed(future_to_idx):
             idx = future_to_idx[future]
             try:
-                img = future.result()
-                generated_views[idx] = img
+                generated_views[idx] = future.result()
             except Exception as e:
-                print(f"   ⚠ Nano Banana failed for {views_spec[idx]['name']}: {e}")
-                # Fallback: just use input image if generation fails
-                generated_views[idx] = input_img.resize((320, 320), Image.LANCZOS)
+                error_str = str(e)
+                if "429" in error_str or "quota" in error_str:
+                    hit_quota = True
+                    print(f"   ⚠ Rate limit hit for {views_spec[idx]['name']}. Will retry sequentially...")
+                else:
+                    print(f"   ⚠ Failed for {views_spec[idx]['name']}: {e}")
+                # Placeholder for now
+                generated_views[idx] = None
+
+    # Second attempt: Sequential for missing views (slow but safer for quota)
+    if hit_quota or any(v is None for v in generated_views):
+        print("   ℹ Retrying missing views sequentially...")
+        for idx, img in enumerate(generated_views):
+            if img is None:
+                try:
+                    # Wait a bit between sequential calls
+                    time.sleep(1)
+                    generated_views[idx] = generate_single_view(client, input_img, views_spec[idx]["name"], views_spec[idx]["az"], views_spec[idx]["el"], category)
+                    print(f"   ✓ Successfully recovered {views_spec[idx]['name']}")
+                except Exception as e:
+                    print(f"   ⚠ Sequential retry failed for {views_spec[idx]['name']}: {e}")
+                    generated_views[idx] = input_img.resize((320, 320), Image.LANCZOS)
                 
     print(f"   ✓ Generated 6 views in {time.time() - start_time:.2f}s")
     
