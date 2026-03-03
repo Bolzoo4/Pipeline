@@ -147,8 +147,10 @@ def main(input_path: str, output_dir: str, category: str, mock: bool,
                 print(f"   ⚠ LRM failed:\n{proc.stderr}")
                 raise RuntimeError(f"LRM Extraction failed (exit {proc.returncode})")
             
-            mesh_path = str(lrm_dir / "multiview_grid.obj")
-            tex_path = str(lrm_dir / "multiview_grid.png")
+            # Find generated mesh (named after the input grid)
+            obj_name = Path(grid_path).stem
+            mesh_path = str(lrm_dir / f"{obj_name}.obj")
+            tex_path = str(lrm_dir / f"{obj_name}.png")
             
             result = {
                 "mesh_path": mesh_path,
@@ -184,8 +186,10 @@ def main(input_path: str, output_dir: str, category: str, mock: bool,
                 print(f"   ⚠ LRM failed:\n{proc.stderr}")
                 raise RuntimeError(f"LRM Extraction failed (exit {proc.returncode})")
             
-            mesh_path = str(lrm_dir / "multiview_grid.obj")
-            tex_path = str(lrm_dir / "multiview_grid.png")
+            # Find generated mesh (named after the input grid)
+            obj_name = Path(grid_path).stem
+            mesh_path = str(lrm_dir / f"{obj_name}.obj")
+            tex_path = str(lrm_dir / f"{obj_name}.png")
             
             result = {
                 "mesh_path": mesh_path,
