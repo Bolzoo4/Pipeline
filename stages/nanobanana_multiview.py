@@ -50,8 +50,8 @@ def get_view_prompt(view_name: str, azimuth_deg: int, elevation_deg: int, catego
         f"Generate ONLY the image of the object from this new 3D perspective."
     )
 
-def generate_single_view(client, input_img, view_name: str, azimuth: int, elevation: int, category: str = "jewelry", model="gemini-3.1-flash-image-preview"):
-    """Call Gemini 3.1 Flash (Experimental) to generate a single view from the reference image."""
+def generate_single_view(client, input_img, view_name: str, azimuth: int, elevation: int, category: str = "jewelry", model="gemini-3-pro-image-preview"):
+    """Call Gemini 3 Pro (Nano Banana Pro) to generate a single view from the reference image."""
     from google.genai.types import GenerateContentConfig, Modality
     
     prompt = (
