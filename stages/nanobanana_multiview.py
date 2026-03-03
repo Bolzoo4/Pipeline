@@ -39,21 +39,22 @@ try:
 except ImportError:
     raise ImportError("pip install google-genai")
 
-def get_view_prompt(view_name: str, category: str = "jewelry") -> str:
+def get_view_prompt(view_name: str, azimuth_deg: int, elevation_deg: int, category: str = "jewelry") -> str:
     return (
-        f"Generate a photorealistic {view_name} view of this exact {category}. "
-        "The object must be isolated on an absolute pure white background (#FFFFFF). "
-        "Keep the exact same lighting, material, color, and scale. "
-        "Do NOT add any shadows on the floor. Center the object perfectly."
+        f"You are a professional 3D product photographer. Generate a high-resolution, photorealistic "
+        f"{view_name} view of the SAME {category} shown in the reference image. "
+        f"CRITICAL: Rotate the object or the camera so that we see it from an angle of "
+        f"AZIMUTH={azimuth_deg} degrees and ELEVATION={elevation_deg} degrees relative to the front. "
+        f"Keep the materials (gold, diamonds), textures, and lighting IDENTICAL. "
+        f"The object must be perfectly centered on a pure white background (#FFFFFF) with NO shadows. "
+        f"Show the 3D structure clearly from this new perspective."
     )
 
-def generate_single_view(client, image_part, view_name: str, category: str = "jewelry", model="gemini-3.1-flash-image-preview"):
+def generate_single_view(client, image_part, view_name: str, azimuth: int, elevation: int, category: str = "jewelry", model="gemini-3.1-flash-image-preview"):
     """Call Gemini to generate a single view from the reference image."""
-    prompt = get_view_prompt(view_name, category)
+    prompt = get_view_prompt(view_name, azimuth, elevation, category)
     
-    # We pass the original image + the prompt instructing it to rotate/change view
-    # Note: Using gemini-3.1-flash-image-preview as it's typically faster for 6 parallel queries
-    print(f"   [NanoBanana] Generating {view_name} view...")
+    print(f"   [NanoBanana] Generating {view_name} (Az:{azimuth}, El:{elevation})...")
     response = client.models.generate_content(
         model=model,
         contents=[
@@ -62,7 +63,7 @@ def generate_single_view(client, image_part, view_name: str, category: str = "je
         ],
         config=GenerateContentConfig(
             response_modalities=[Modality.IMAGE],
-            temperature=0.0,
+            temperature=0.4, # Added a bit of temperature to encourage deviation from the input 
         ),
     )
     
@@ -91,13 +92,14 @@ def generate_multiview_grid(input_image_path: str, output_image_path: str, categ
     # Load input image
     input_img = Image.open(input_image_path).convert("RGB")
     
-    views_needed = [
-        "front-right 30 degree", # View 1 (approx Zero123++ spec)
-        "right side",            # View 2
-        "back-right 150 degree", # View 3
-        "back-left 210 degree",  # View 4
-        "left side",             # View 5
-        "front-left 330 degree"  # View 6
+    # Exactly Zero123++ canonical poses
+    views_spec = [
+        {"name": "front-right high", "az": 30,  "el": 20},  # View 0
+        {"name": "right low",        "az": 90,  "el": -10}, # View 1
+        {"name": "back-right high",  "az": 150, "el": 20},  # View 2
+        {"name": "back-left low",    "az": 210, "el": -10}, # View 3
+        {"name": "left high",        "az": 270, "el": 20},  # View 4
+        {"name": "front-left low",   "az": 330, "el": -10}  # View 5
     ]
     
     print(f"   ℹ Querying Nano Banana Pro (Gemini 3) for 6 views in parallel...")
@@ -107,8 +109,16 @@ def generate_multiview_grid(input_image_path: str, output_image_path: str, categ
     generated_views = [None] * 6
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
         future_to_idx = {
-            executor.submit(generate_single_view, client, input_img, view_name, category): idx
-            for idx, view_name in enumerate(views_needed)
+            executor.submit(
+                generate_single_view, 
+                client, 
+                input_img, 
+                spec["name"], 
+                spec["az"], 
+                spec["el"], 
+                category
+            ): idx
+            for idx, spec in enumerate(views_spec)
         }
         
         for future in concurrent.futures.as_completed(future_to_idx):
@@ -117,7 +127,7 @@ def generate_multiview_grid(input_image_path: str, output_image_path: str, categ
                 img = future.result()
                 generated_views[idx] = img
             except Exception as e:
-                print(f"   ⚠ Nano Banana failed for view {views_needed[idx]}: {e}")
+                print(f"   ⚠ Nano Banana failed for {views_spec[idx]['name']}: {e}")
                 # Fallback: just use input image if generation fails
                 generated_views[idx] = input_img.resize((320, 320), Image.LANCZOS)
                 
