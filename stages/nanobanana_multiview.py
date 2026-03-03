@@ -87,6 +87,7 @@ def generate_multiview_grid(input_image_path: str, output_image_path: str, categ
     start_time = time.time()
     generated_views = [None] * 6
     
+    # First attempt: Parallel (fast)
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
         future_to_idx = {
             executor.submit(generate_single_view, client, input_img, spec["name"], spec["az"], spec["el"], category): idx
@@ -98,11 +99,25 @@ def generate_multiview_grid(input_image_path: str, output_image_path: str, categ
             try:
                 generated_views[idx] = future.result()
             except Exception as e:
-                print(f"   ⚠ Nano Banana failed for {views_spec[idx]['name']}: {e}")
-                # Use a white placeholder on failure to avoid crashing the rest of the pipe
+                # If we hit 429, we'll retry later in sequential mode
+                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                    print(f"   ⚠ Rate limit (429) for {views_spec[idx]['name']}. Queued for retry.")
+                else:
+                    print(f"   ⚠ Failed for {views_spec[idx]['name']}: {e}")
+                generated_views[idx] = None
+
+    # Second attempt: Sequential (slow but bypasses 429 concurrency limits)
+    for idx, img in enumerate(generated_views):
+        if img is None:
+            print(f"   ℹ Retrying {views_spec[idx]['name']} sequentially...")
+            try:
+                time.sleep(2) # Small cooldown
+                generated_views[idx] = generate_single_view(client, input_img, views_spec[idx]["name"], views_spec[idx]["az"], views_spec[idx]["el"], category)
+            except Exception as e:
+                print(f"   ⚠ Retry failed for {views_spec[idx]['name']}: {e}")
                 generated_views[idx] = Image.new('RGB', (320, 320), (255, 255, 255))
                 
-    print(f"   ✓ Generated 6 views in {time.time() - start_time:.2f}s")
+    print(f"   ✓ Generated all views in {time.time() - start_time:.2f}s")
     
     # Stitch into 2x3 grid
     grid_img = Image.new('RGB', (640, 960), (255, 255, 255))
