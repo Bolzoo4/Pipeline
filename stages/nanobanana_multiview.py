@@ -30,7 +30,7 @@ def generate_single_view(client, input_img, view_name: str, azimuth: int, elevat
         f"Generate ONLY the image of the object from this new 3D perspective."
     )
     
-    print(f"   [NanoBanana] Generating {view_name} (Az:{azimuth}, El:{elevation}) using {model} (v1beta1)...")
+    print(f"   [NanoBanana] Generating {view_name} (Az:{azimuth}, El:{elevation}) using {model}...")
     
     response = client.models.generate_content(
         model=model,
@@ -57,7 +57,7 @@ def generate_single_view(client, input_img, view_name: str, azimuth: int, elevat
 def generate_multiview_grid(input_image_path: str, output_image_path: str, category: str = "jewelry", project_id: str = None, location: str = "us-central1"):
     """
     Generates 6 views and stitches them into a 640x960 grid.
-    Strictly uses Gemini 3 Pro Image with v1beta1.
+    Strictly uses Gemini 2.5 Flash Image as requested.
     """
     
     if project_id:
@@ -65,10 +65,7 @@ def generate_multiview_grid(input_image_path: str, output_image_path: str, categ
     os.environ["GOOGLE_CLOUD_LOCATION"] = location
     os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "True"
     
-    # Force v1beta1 via HttpOptions
-    client = genai.Client(
-        http_options=HttpOptions(api_version='v1beta1')
-    )
+    client = genai.Client()
     
     # Load input image
     input_img = Image.open(input_image_path).convert("RGB")
