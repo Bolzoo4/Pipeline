@@ -76,7 +76,7 @@ def main(input_path: str, output_dir: str, category: str, mock: bool,
          quality: int, steps: int, seed: int, multiview: str, grid_input: str):
     """Jewelry → 3D Model Pipeline (InstantMesh/NanoBanana)."""
     input_path = Path(input_path)
-    output_dir = Path(output_dir)
+    output_dir = Path(output_dir).absolute()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     mode_label = "MOCK" if mock else f"REAL (GPU) - {multiview.upper()}"
