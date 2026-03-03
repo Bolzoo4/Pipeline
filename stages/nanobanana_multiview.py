@@ -16,7 +16,7 @@ try:
 except ImportError:
     raise ImportError("pip install google-genai")
 
-def generate_single_view(client, input_img, view_name: str, azimuth: int, elevation: int, category: str = "jewelry", model="gemini-3-pro-image-preview"):
+def generate_single_view(client, input_img, view_name: str, azimuth: int, elevation: int, category: str = "jewelry", model="gemini-3.1-flash-image-preview"):
     """
     Call ONLY Gemini 3 Pro Image (Nano Banana Pro) to generate a single view.
     """
