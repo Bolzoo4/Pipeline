@@ -44,13 +44,13 @@ def get_view_prompt(view_name: str, azimuth_deg: int, elevation_deg: int, catego
         f"You are a professional 3D product photographer. Generate a high-resolution, photorealistic "
         f"{view_name} view of the SAME {category} shown in the reference image. "
         f"CRITICAL: Rotate the object or the camera so that we see it from an angle of "
-        f"AZIMUTH={azimuth_deg} degrees and ELEVATION={elevation_deg} degrees relative to the front. "
-        f"Keep the materials (gold, diamonds), textures, and lighting IDENTICAL. "
-        f"The object must be perfectly centered on a pure white background (#FFFFFF) with NO shadows. "
-        f"Show the 3D structure clearly from this new perspective."
+        f"AZIMUTH={azimuth_deg} degrees and ELEVATION={elevation_deg} degrees relative to the FRONT view. "
+        f"Keep the materials (gold, diamonds), textures, and lighting IDENTICAL to the source. "
+        f"The object must be perfectly centered on a pure white background (#FFFFFF) with NO shadows or floor. "
+        f"Generate ONLY the image of the object from this new 3D perspective."
     )
 
-def generate_single_view(client, image_part, view_name: str, azimuth: int, elevation: int, category: str = "jewelry", model="gemini-3.1-flash-image-preview"):
+def generate_single_view(client, image_part, view_name: str, azimuth: int, elevation: int, category: str = "jewelry", model="gemini-3-pro-image-preview"):
     """Call Gemini to generate a single view from the reference image."""
     prompt = get_view_prompt(view_name, azimuth, elevation, category)
     
