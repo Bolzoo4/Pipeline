@@ -88,11 +88,7 @@ grep -vE "nvdiffrast|ninja|torch|torchvision" requirements.txt | pip install -r 
 pip install xatlas trimesh rembg 2>&1 | tail -1
 echo "  ✅ Unique3D deps OK"
 
-# ─── 11. Pin diffusers (Unique3D needs 0.27.2) ───
-echo ""
-echo "📦 Pinning diffusers version..."
-pip install 'diffusers==0.27.2' 2>&1 | tail -1
-echo "  ✅ diffusers pinned"
+# (No version pinning — Unique3D's own requirements.txt handles versions)
 
 # ─── 11. Verify imports ───
 echo ""
