@@ -1,12 +1,12 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════
-# Gioielli Pipeline v4.1 — RunPod One-Shot Setup
+# Gioielli Pipeline v5.0 — RunPod One-Shot Setup (Unique3D)
 #
 # Run this ONCE after starting a fresh RunPod instance:
 #   cd /workspace && bash pipeline/setup_runpod.sh
 #
 # Tested on: RunPod PyTorch 2.4.1 template (Python 3.11, CUDA 12.4)
-# Requires: ~6GB disk space for models
+# Requires: ~6GB disk space for models, ≥24GB VRAM GPU (A6000/A100)
 # ═══════════════════════════════════════════════════════════════
 
 # Nano Banana Pro (Gemini 3) / Vertex AI Environment
@@ -17,7 +17,7 @@ export GOOGLE_GENAI_USE_VERTEXAI="True"
 set -e
 
 echo "═══════════════════════════════════════════════"
-echo "💎 Gioielli Pipeline v4.1 — Setup"
+echo "💎 Gioielli Pipeline v5.0 (Unique3D) — Setup"
 echo "═══════════════════════════════════════════════"
 
 # ─── 1. GPU check ───
@@ -49,15 +49,15 @@ echo "📦 Pipeline core deps..."
 pip install click Pillow numpy opencv-python-headless trimesh pygltflib onnxruntime-gpu google-genai 2>&1 | tail -1
 echo "  ✅ Pipeline deps OK"
 
-# ─── 6. Clone InstantMesh ───
+# ─── 6. Clone Unique3D ───
 echo ""
-if [ -d "/workspace/InstantMesh" ]; then
-    echo "✅ InstantMesh already cloned"
+if [ -d "/workspace/Unique3D" ]; then
+    echo "✅ Unique3D already cloned"
 else
-    echo "📥 Cloning InstantMesh..."
+    echo "📥 Cloning Unique3D..."
     cd /workspace
-    git clone https://github.com/TencentARC/InstantMesh.git
-    echo "  ✅ InstantMesh cloned"
+    git clone https://github.com/Wanshui-Ai/Unique3D.git
+    echo "  ✅ Unique3D cloned"
 fi
 cd /workspace
 
@@ -73,14 +73,16 @@ echo "📦 Installing nvdiffrast..."
 pip install git+https://github.com/NVlabs/nvdiffrast/ --no-build-isolation 2>&1 | tail -1
 echo "  ✅ nvdiffrast OK"
 
-# ─── 9. Install InstantMesh deps (skip nvdiffrast line) ───
+# ─── 9. Install Unique3D deps ───
 echo ""
-echo "📦 Installing InstantMesh deps..."
-cd /workspace/InstantMesh
-grep -v nvdiffrast requirements.txt | pip install -r /dev/stdin 2>&1 | tail -3
-echo "  ✅ InstantMesh deps OK"
+echo "📦 Installing Unique3D deps..."
+cd /workspace/Unique3D
+# Skip some problematic or already installed versions
+grep -vE "nvdiffrast|ninja|torch|torchvision" requirements.txt | pip install -r /dev/stdin 2>&1 | tail -3
+pip install xatlas trimesh rembg[gpu,pillow] 2>&1 | tail -1
+echo "  ✅ Unique3D deps OK"
 
-# ─── 10. Pin compatible versions (avoid huggingface/transformers conflicts) ───
+# ─── 10. Pin compatible versions ───
 echo ""
 echo "📦 Pinning compatible versions..."
 pip install \
@@ -88,6 +90,7 @@ pip install \
     'transformers==4.37.2' \
     'diffusers==0.27.2' \
     'accelerate==0.28.0' \
+    'onnxruntime-gpu' \
     2>&1 | tail -1
 echo "  ✅ Versions pinned"
 
@@ -98,8 +101,6 @@ cd /workspace
 python3 -c "
 import torch, rembg, diffusers, xatlas, trimesh
 import nvdiffrast
-from einops import rearrange
-from omegaconf import OmegaConf
 print(f'  PyTorch:    {torch.__version__}')
 print(f'  CUDA:       {torch.cuda.is_available()}')
 print(f'  GPU:        {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')
@@ -107,29 +108,33 @@ print(f'  diffusers:  {diffusers.__version__}')
 print('  ✅ All imports OK')
 "
 
-# ─── 12. Pre-download models (optional, saves time on first run) ───
+# ─── 12. Pre-download models (Unique3D) ───
 echo ""
-read -p "📥 Pre-download models (~4GB)? [Y/n] " answer
+read -p "📥 Pre-download Unique3D models (~4GB)? [Y/n] " answer
 answer=${answer:-Y}
 if [[ "$answer" =~ ^[Yy]$ ]]; then
     echo "📥 Downloading models (this takes 3-5 minutes)..."
     python3 -c "
 from huggingface_hub import hf_hub_download
+import os
 
-print('  📥 InstantMesh UNet...')
-hf_hub_download(repo_id='TencentARC/InstantMesh', filename='diffusion_pytorch_model.bin', repo_type='model')
+def download_ckpt(repo, filename, local_dir):
+    print(f'  📥 Downloading {filename}...')
+    path = hf_hub_download(repo_id=repo, filename=filename, local_dir=local_dir)
+    return path
 
-print('  📥 InstantMesh LRM (large)...')
-hf_hub_download(repo_id='TencentARC/InstantMesh', filename='instant_mesh_large.ckpt', repo_type='model')
+# Unique3D models
+ckpt_dir = '/workspace/Unique3D/ckpt'
+os.makedirs(ckpt_dir, exist_ok=True)
 
-print('  📥 Zero123++ v1.2...')
+# Note: These are example checkpoints, actual repo might have different ones
+# We'll try to download the core ones needed for ISOMER
 try:
-    from diffusers import DiffusionPipeline
-    import torch
-    pipe = DiffusionPipeline.from_pretrained('sudo-ai/zero123plus-v1.2', custom_pipeline='zero123plus', torch_dtype=torch.float16)
-    del pipe
+    download_ckpt('Wanshui/Unique3D', 'img_to_mv.pth', ckpt_dir)
+    download_ckpt('Wanshui/Unique3D', 'mv_to_mesh.pth', ckpt_dir)
 except Exception as e:
-    print(f'  ⚠ Zero123++ download skipped (not critical for NanoBanana): {e}')
+    print(f'  ⚠ Some models failed to download: {e}')
+    print('  ℹ You might need to download them manually or via the official unique3d script.')
 
 print('  📥 rembg u2net...')
 from rembg import new_session
@@ -145,12 +150,16 @@ echo ""
 echo "═══════════════════════════════════════════════"
 echo "✅ Setup complete!"
 echo ""
-echo "📋 Quick start:"
+echo "📋 Quick start (with manual grid):"
 echo "  cd /workspace/pipeline"
-echo "  python pipeline.py -i /workspace/test_ring.jpg -o /workspace/output/ --real -c ring"
+echo "  python pipeline.py -i test_ring.jpg -o /workspace/output/ --real --grid griglia_corretta.png -c ring"
+echo ""
+echo "📋 Quick start (auto-generate views with Gemini):"
+echo "  cd /workspace/pipeline"
+echo "  python pipeline.py -i test_ring.jpg -o /workspace/output/ --real -c ring"
 echo ""
 echo "📋 Options:"
-echo "  --steps 100     Diffusion steps (default 100, more = better)"
-echo "  --seed 42       Random seed"
+echo "  --seed 42        Random seed"
 echo "  --mock           Skip GPU, test flow only"
+echo "  --grid FILE      Use pre-made 2x2 multiview grid"
 echo "═══════════════════════════════════════════════"

@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-Jewelry Asset Pipeline v4 — InstantMesh 3D Reconstruction.
+Jewelry Asset Pipeline v5 — Unique3D 3D Reconstruction.
 
-End-to-end: single image → InstantMesh (Zero123++ + LRM + FlexiCubes) → textured .glb
+End-to-end: single image → Unique3D (ISOMER) → textured .glb
 
 Usage:
     python pipeline.py -i ring.jpg -o ./bundle/ --real -c ring
+    python pipeline.py -i ring.jpg -o ./bundle/ --real --grid multiview.png -c ring
     python pipeline.py -i ring.jpg -o ./bundle/ --mock -c ring  # skip AI, test flow
 """
 
 import json
+import os
 import time
 import shutil
 from pathlib import Path
@@ -37,7 +39,6 @@ def create_mock_glb(output_path: Path) -> int:
     try:
         import trimesh
         mesh = trimesh.creation.torus(major_radius=0.8, minor_radius=0.1, major_sections=48, minor_sections=24)
-        # Add a simple gray color
         mesh.visual = trimesh.visual.ColorVisuals(
             mesh=mesh,
             vertex_colors=np.tile([180, 180, 180, 255], (len(mesh.vertices), 1)).astype(np.uint8)
@@ -46,9 +47,54 @@ def create_mock_glb(output_path: Path) -> int:
         output_path.write_bytes(glb_data)
         return output_path.stat().st_size
     except ImportError:
-        # Minimal empty GLB
         output_path.write_bytes(b'\x00' * 100)
         return 100
+
+
+def convert_to_glb(mesh_path: str, glb_path: str, texture_path: str = None):
+    """Convert OBJ mesh to GLB, optionally embedding the texture."""
+    import trimesh
+
+    click.echo(f"   ℹ Converting OBJ → GLB...")
+
+    if texture_path and os.path.exists(texture_path):
+        # Load OBJ with material
+        mesh = trimesh.load(mesh_path, process=False)
+        if isinstance(mesh, trimesh.Scene):
+            # Apply texture to all geometries
+            tex_img = Image.open(texture_path)
+            material = trimesh.visual.material.PBRMaterial(
+                baseColorTexture=tex_img,
+                metallicFactor=0.8,
+                roughnessFactor=0.2,
+            )
+            for geom in mesh.geometry.values():
+                if hasattr(geom.visual, 'uv') and geom.visual.uv is not None:
+                    geom.visual = trimesh.visual.TextureVisuals(
+                        uv=geom.visual.uv,
+                        material=material,
+                    )
+            glb_data = mesh.export(file_type='glb')
+        else:
+            tex_img = Image.open(texture_path)
+            material = trimesh.visual.material.PBRMaterial(
+                baseColorTexture=tex_img,
+                metallicFactor=0.8,
+                roughnessFactor=0.2,
+            )
+            if hasattr(mesh.visual, 'uv') and mesh.visual.uv is not None:
+                mesh.visual = trimesh.visual.TextureVisuals(
+                    uv=mesh.visual.uv,
+                    material=material,
+                )
+            glb_data = mesh.export(file_type='glb')
+    else:
+        # No texture: export with vertex colors or plain
+        mesh = trimesh.load(mesh_path, process=False)
+        glb_data = mesh.export(file_type='glb')
+
+    Path(glb_path).write_bytes(glb_data)
+    click.echo(f"   ✓ GLB saved: {glb_path} ({len(glb_data) / 1024:.1f}KB)")
 
 
 @click.command()
@@ -63,23 +109,18 @@ def create_mock_glb(output_path: Path) -> int:
               help="Mock mode (no GPU/AI) or real mode")
 @click.option("--quality", default=90, type=int,
               help="Texture quality (0-100)")
-@click.option("--steps", default=100, type=int,
-              help="Diffusion steps for multi-view generation (more = better quality)")
 @click.option("--seed", default=42, type=int,
               help="Random seed")
-@click.option("--multiview", default="zero123",
-              type=click.Choice(["zero123", "nanobanana"]),
-              help="Engine to generate multi-view images")
 @click.option("--grid", "-g", "grid_input", type=click.Path(exists=True),
-              help="Path to an existing 3x2 multiview grid image (skips generation)")
+              help="Path to an existing 2x2 multiview grid image (skips generation)")
 def main(input_path: str, output_dir: str, category: str, mock: bool,
-         quality: int, steps: int, seed: int, multiview: str, grid_input: str):
-    """Jewelry → 3D Model Pipeline (InstantMesh/NanoBanana)."""
+         quality: int, seed: int, grid_input: str):
+    """Jewelry → 3D Model Pipeline (Unique3D/NanoBanana)."""
     input_path = Path(input_path)
     output_dir = Path(output_dir).absolute()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    mode_label = "MOCK" if mock else f"REAL (GPU) - {multiview.upper()}"
+    mode_label = "MOCK" if mock else "REAL (GPU) - UNIQUE3D"
     click.echo(f"🔧 Pipeline mode: {mode_label}")
     click.echo(f"💎 Category: {category}")
     click.echo(f"📸 Input: {input_path}")
@@ -108,105 +149,33 @@ def main(input_path: str, output_dir: str, category: str, mock: bool,
         preprocess_input(str(input_path), str(processed_path), target_size=1024)
         click.echo(f"   ✓ Preprocessed ({time.time() - t:.2f}s)")
 
-        # ─── Stage 2: InstantMesh 3D Reconstruction ───
-        click.echo(f"\n🚀 Stage 2/4: 3D Reconstruction...")
+        # ─── Stage 2: Unique3D 3D Reconstruction ───
+        click.echo(f"\n🚀 Stage 2/4: 3D Reconstruction (Unique3D)...")
         t = time.time()
 
-        from stages.instantmesh_stage import convert_to_glb, ensure_setup
-        ensure_setup()
+        from stages.unique3d_stage import run_unique3d_isomer
         
         result = {}
         
         if grid_input:
-            # Bypass generation: use provided grid
+            # Bypass generation: use provided grid (must be 4-view for Unique3D)
             grid_path = str(Path(grid_input).absolute())
             click.echo(f"   ℹ Using provided multiview grid: {grid_path}")
             
-            # We force it through the LRM logic (similar to nanobanana stage 2)
-            from stages.nanobanana_multiview import generate_multiview_grid # used for imports below
-            import subprocess, sys, os
-            
-            click.echo("   [2/2] Extracting 3D Mesh with LRM...")
-            lrm_dir = output_dir / "instantmesh" / "lrm_output"
-            lrm_dir.mkdir(parents=True, exist_ok=True)
-            
-            INSTANTMESH_DIR = "/workspace/InstantMesh"
-            env = os.environ.copy()
-            env["PYTHONPATH"] = INSTANTMESH_DIR + ":" + env.get("PYTHONPATH", "")
-            
-            lrm_script = str(Path("stages/run_lrm_only.py").absolute())
-            cmd = [
-                sys.executable, lrm_script,
-                os.path.join(INSTANTMESH_DIR, "configs", "instant-mesh-large.yaml"),
-                grid_path,
-                str(lrm_dir)
-            ]
-            
-            proc = subprocess.run(cmd, cwd=INSTANTMESH_DIR, env=env, capture_output=True, text=True)
-            if proc.returncode != 0:
-                print(f"   ⚠ LRM failed:\n{proc.stderr}")
-                raise RuntimeError(f"LRM Extraction failed (exit {proc.returncode})")
-            
-            # Find generated mesh (named after the input grid)
-            obj_name = Path(grid_path).stem
-            mesh_path = str(lrm_dir / f"{obj_name}.obj")
-            tex_path = str(lrm_dir / f"{obj_name}.png")
-            
-            result = {
-                "mesh_path": mesh_path,
-                "texture_map": tex_path if os.path.exists(tex_path) else None,
-                "multiview_image": grid_path
-            }
-        elif multiview == "nanobanana":
+            result = run_unique3d_isomer(grid_path, str(output_dir))
+            result["multiview_image"] = grid_path
+        else:
+            # Generate 4-view grid with NanoBanana (Gemini)
             from stages.nanobanana_multiview import generate_multiview_grid
-            import subprocess, sys, os
             
             grid_path = str(output_dir / "multiview_grid.png")
             click.echo("   [1/2] Generating Multiview Grid with Vertex AI (NanoBanana)...")
             generate_multiview_grid(str(processed_path), grid_path, category=category)
             
-            click.echo("   [2/2] Extracting 3D Mesh with LRM...")
-            lrm_dir = output_dir / "instantmesh" / "lrm_output"
-            lrm_dir.mkdir(parents=True, exist_ok=True)
-            
-            INSTANTMESH_DIR = "/workspace/InstantMesh"
-            env = os.environ.copy()
-            env["PYTHONPATH"] = INSTANTMESH_DIR + ":" + env.get("PYTHONPATH", "")
-            
-            lrm_script = str(Path("stages/run_lrm_only.py").absolute())
-            cmd = [
-                sys.executable, lrm_script,
-                os.path.join(INSTANTMESH_DIR, "configs", "instant-mesh-large.yaml"),
-                grid_path,
-                str(lrm_dir)
-            ]
-            
-            proc = subprocess.run(cmd, cwd=INSTANTMESH_DIR, env=env, capture_output=True, text=True)
-            if proc.returncode != 0:
-                print(f"   ⚠ LRM failed:\n{proc.stderr}")
-                raise RuntimeError(f"LRM Extraction failed (exit {proc.returncode})")
-            
-            # Find generated mesh (named after the input grid)
-            obj_name = Path(grid_path).stem
-            mesh_path = str(lrm_dir / f"{obj_name}.obj")
-            tex_path = str(lrm_dir / f"{obj_name}.png")
-            
-            result = {
-                "mesh_path": mesh_path,
-                "texture_map": tex_path if os.path.exists(tex_path) else None,
-                "multiview_image": grid_path
-            }
-        else:
-            # Traditional InstantMesh (Zero123++)
-            from stages.instantmesh_stage import run as run_instantmesh
-            result = run_instantmesh(
-                str(processed_path),
-                str(output_dir),
-                export_texmap=True,
-                diffusion_steps=steps,
-                seed=seed,
-            )
-            
+            click.echo("   [2/2] Extracting 3D Mesh with Unique3D (ISOMER)...")
+            result = run_unique3d_isomer(grid_path, str(output_dir))
+            result["multiview_image"] = grid_path
+
         click.echo(f"   ✓ 3D Reconstruction complete ({time.time() - t:.2f}s)")
 
         # ─── Stage 3: Texture Enhancement ───
@@ -215,15 +184,12 @@ def main(input_path: str, output_dir: str, category: str, mock: bool,
 
         texture_path = result.get("texture_map")
         if texture_path and Path(texture_path).exists():
-            # Enhance texture (sharpen, contrast, color)
             enhanced_path = str(Path(texture_path).parent / "texture_enhanced.png")
             enhance_texture(texture_path, enhanced_path)
 
-            # Upscale texture 2x (Real-ESRGAN if available, PIL fallback)
             upscaled_path = str(Path(texture_path).parent / "texture_upscaled.png")
             upscale_texture(enhanced_path, upscaled_path, scale=2, method="auto")
 
-            # Use the upscaled texture for GLB conversion
             result["texture_map"] = upscaled_path
             click.echo(f"   ✓ Texture enhanced + upscaled ({time.time() - t:.2f}s)")
         else:
@@ -275,9 +241,9 @@ def main(input_path: str, output_dir: str, category: str, mock: bool,
             bundle_size += f.stat().st_size
 
     metadata = {
-        "version": "4.0.0",
+        "version": "5.0.0",
         "format": "glb",
-        "method": "instantmesh",
+        "method": "unique3d",
         "category": category,
         "source": input_path.name,
         "pipeline_mode": "mock" if mock else "real",
