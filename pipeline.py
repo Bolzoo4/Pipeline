@@ -2,11 +2,10 @@
 """
 Jewelry Asset Pipeline v5 — Unique3D 3D Reconstruction.
 
-End-to-end: single image → Unique3D (ISOMER) → textured .glb
+End-to-end: single image → Unique3D (multiview + normals + ISOMER) → textured .glb
 
 Usage:
     python pipeline.py -i ring.jpg -o ./bundle/ --real -c ring
-    python pipeline.py -i ring.jpg -o ./bundle/ --real --grid multiview.png -c ring
     python pipeline.py -i ring.jpg -o ./bundle/ --mock -c ring  # skip AI, test flow
 """
 
@@ -111,11 +110,9 @@ def convert_to_glb(mesh_path: str, glb_path: str, texture_path: str = None):
               help="Texture quality (0-100)")
 @click.option("--seed", default=42, type=int,
               help="Random seed")
-@click.option("--grid", "-g", "grid_input", type=click.Path(exists=True),
-              help="Path to an existing 2x2 multiview grid image (skips generation)")
 def main(input_path: str, output_dir: str, category: str, mock: bool,
-         quality: int, seed: int, grid_input: str):
-    """Jewelry → 3D Model Pipeline (Unique3D/NanoBanana)."""
+         quality: int, seed: int):
+    """Jewelry → 3D Model Pipeline (Unique3D)."""
     input_path = Path(input_path)
     output_dir = Path(output_dir).absolute()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -153,28 +150,11 @@ def main(input_path: str, output_dir: str, category: str, mock: bool,
         click.echo(f"\n🚀 Stage 2/4: 3D Reconstruction (Unique3D)...")
         t = time.time()
 
-        from stages.unique3d_stage import run_unique3d_isomer
+        from stages.unique3d_stage import run_unique3d
         
-        result = {}
-        
-        if grid_input:
-            # Bypass generation: use provided grid (must be 4-view for Unique3D)
-            grid_path = str(Path(grid_input).absolute())
-            click.echo(f"   ℹ Using provided multiview grid: {grid_path}")
-            
-            result = run_unique3d_isomer(grid_path, str(output_dir))
-            result["multiview_image"] = grid_path
-        else:
-            # Generate 4-view grid with NanoBanana (Gemini)
-            from stages.nanobanana_multiview import generate_multiview_grid
-            
-            grid_path = str(output_dir / "multiview_grid.png")
-            click.echo("   [1/2] Generating Multiview Grid with Vertex AI (NanoBanana)...")
-            generate_multiview_grid(str(processed_path), grid_path, category=category)
-            
-            click.echo("   [2/2] Extracting 3D Mesh with Unique3D (ISOMER)...")
-            result = run_unique3d_isomer(grid_path, str(output_dir))
-            result["multiview_image"] = grid_path
+        # Unique3D takes a SINGLE image and does everything internally:
+        #   multiview generation → normal estimation → ISOMER mesh
+        result = run_unique3d(str(processed_path), str(output_dir))
 
         click.echo(f"   ✓ 3D Reconstruction complete ({time.time() - t:.2f}s)")
 

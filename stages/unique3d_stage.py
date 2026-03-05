@@ -6,45 +6,72 @@ from pathlib import Path
 
 UNIQUE3D_DIR = "/workspace/Unique3D"
 
-def run_unique3d_isomer(grid_path, output_dir):
+
+def ensure_setup():
+    """Verify Unique3D is cloned and ready."""
+    if not os.path.isdir(UNIQUE3D_DIR):
+        raise RuntimeError(
+            f"Unique3D not found at {UNIQUE3D_DIR}. "
+            "Run setup_runpod.sh first."
+        )
+    click.echo("   ✓ Unique3D already set up")
+
+
+def run_unique3d(input_image_path: str, output_dir: str):
     """
-    Runs Unique3D ISOMER reconstruction on a 4-view grid.
-    Expected grid: 2x2 or 4x1 with Front, Right, Back, Left views.
+    Runs Unique3D end-to-end on a SINGLE input image.
+    
+    Unique3D internally:
+      1. Generates 4 orthographic multiview images
+      2. Estimates normal maps
+      3. Runs ISOMER reconstruction → OBJ + texture
+    
+    Args:
+        input_image_path: Path to a single product photo (any angle, white bg preferred)
+        output_dir: Where to save the mesh output
+    
+    Returns:
+        dict with mesh_path, texture_map
     """
-    lrm_dir = Path(output_dir) / "unique3d" / "isomer_output"
-    lrm_dir.mkdir(parents=True, exist_ok=True)
+    ensure_setup()
     
-    # We need a wrapper script inside Unique3D to call their internal APIs
-    wrapper_script = Path(__file__).parent / "run_isomer_wrapper.py"
+    isomer_dir = Path(output_dir) / "unique3d_output"
+    isomer_dir.mkdir(parents=True, exist_ok=True)
     
-    # We'll create this wrapper script below
+    wrapper_script = str(Path(__file__).parent / "run_unique3d_wrapper.py")
+    
     env = os.environ.copy()
     env["PYTHONPATH"] = UNIQUE3D_DIR + ":" + env.get("PYTHONPATH", "")
     
     cmd = [
-        sys.executable, str(wrapper_script),
-        "--input_grid", str(grid_path),
-        "--output_dir", str(lrm_dir),
-        "--ckpt_path", "/workspace/Unique3D/ckpt"
+        sys.executable, wrapper_script,
+        "--input_image", str(input_image_path),
+        "--output_dir", str(isomer_dir),
     ]
     
-    click.echo(f"   [Unique3D] Running ISOMER reconstruction...")
+    click.echo(f"   [Unique3D] Running full pipeline (multiview + normals + ISOMER)...")
     proc = subprocess.run(cmd, cwd=UNIQUE3D_DIR, env=env, capture_output=True, text=True)
     
     if proc.returncode != 0:
         click.echo(f"   ⚠ Unique3D failed:\n{proc.stderr}")
-        raise RuntimeError(f"Unique3D Reconstruction failed (exit {proc.returncode})")
+        raise RuntimeError(f"Unique3D failed (exit {proc.returncode})")
     
-    # Unique3D usually saves as 'mesh.obj' or named after input
-    # We'll find it in the output dir
-    obj_files = list(lrm_dir.glob("*.obj"))
+    # Find generated mesh
+    obj_files = list(isomer_dir.glob("*.obj"))
     if not obj_files:
-        raise FileNotFoundError("Unique3D finished but no .obj was found!")
+        raise FileNotFoundError(f"Unique3D finished but no .obj found in {isomer_dir}")
     
     mesh_path = str(obj_files[0])
-    tex_path = str(mesh_path.replace(".obj", ".png"))
+    
+    # Look for texture (PNG next to OBJ, or _albedo, or texture_*)
+    tex_candidates = list(isomer_dir.glob("*.png"))
+    tex_path = None
+    for t in tex_candidates:
+        if "normal" not in t.name.lower():
+            tex_path = str(t)
+            break
     
     return {
         "mesh_path": mesh_path,
-        "texture_map": tex_path if os.path.exists(tex_path) else None
+        "texture_map": tex_path,
     }
