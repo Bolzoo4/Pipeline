@@ -2,12 +2,12 @@
 # ═══════════════════════════════════════════════════════════════
 # Gioielli Pipeline v5.0 — RunPod One-Shot Setup (Unique3D)
 #
-# Run this ONCE after starting a fresh RunPod instance:
-#   cd /workspace && bash pipeline/setup_runpod.sh
+# IMPORTANT: This script keeps the RunPod template's torch version
+# (2.4.1+cu124) and pins all other packages to compatible versions.
 #
-# Tested on: RunPod PyTorch 2.4.1 template (Python 3.11, CUDA 12.x)
-# Requires: ~15GB disk for models+deps, ≥24GB VRAM GPU (A6000/A100)
-# Total setup time: ~15-20 minutes
+# Run: cd /workspace && bash pipeline/setup_runpod.sh
+# Requires: ≥24GB VRAM GPU (A6000/A100), ~15GB disk
+# Time: ~15-20 minutes
 # ═══════════════════════════════════════════════════════════════
 
 set -e
@@ -25,7 +25,7 @@ nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader 2>/de
 echo ""
 echo "📦 [2/10] System deps..."
 apt-get update -qq && apt-get install -y -qq libgl1-mesa-glx libglib2.0-0 libopengl0 > /dev/null 2>&1
-echo "  ✅ System deps OK"
+echo "  ✅ OK"
 
 # ─── 3. Clone Unique3D ───
 echo ""
@@ -39,66 +39,78 @@ else
 fi
 cd /workspace
 
-# ─── 4. Install pip packages (NO compilation, pure Python only) ───
-#    We install everything that doesn't need to compile against torch FIRST.
-#    This is fast (~2 min).
+# ─── 4. Check base torch (DO NOT UPGRADE) ───
 echo ""
-echo "📦 [4/10] Python packages (pip-only, no compilation)..."
+echo "🔍 [4/10] Base torch version (keeping RunPod template)..."
+python3 -c "import torch; print(f'  torch={torch.__version__}  cuda={torch.version.cuda}')"
+
+# ─── 5. Install ALL Python packages with PINNED versions ───
+#    These versions are tested to work together with torch 2.4.1
+echo ""
+echo "📦 [5/10] Installing pinned Python packages (~3 min)..."
 pip install --upgrade pip 2>&1 | tail -1
+
+# Core diffusion stack — pinned for torch 2.4.x compatibility
 pip install \
-    'accelerate>=0.28' \
-    'datasets' \
-    'diffusers>=0.26.3' \
+    'diffusers==0.27.2' \
+    'transformers==4.44.0' \
+    'huggingface_hub==0.25.2' \
+    'accelerate==0.33.0' \
+    'tokenizers>=0.19,<1.0' \
+    'datasets>=2.18,<3.0' \
+    'peft==0.12.0' \
+    'safetensors>=0.4' \
+    2>&1 | tail -3
+
+# Other Unique3D deps (pure Python, no compilation)
+pip install \
+    'omegaconf>=2.3.0' \
     'fire' \
     'jaxtyping' \
     'numba' \
     'numpy' \
-    'omegaconf>=2.3.0' \
     'opencv-python-headless' \
-    'peft' \
     'Pillow' \
     'pygltflib' \
     'pymeshlab>=2023.12' \
     'rembg' \
+    'onnxruntime' \
     'tqdm' \
-    'transformers' \
     'trimesh' \
     'typeguard' \
     'wandb' \
     'xatlas' \
-    'click' \
-    'google-genai' \
-    2>&1 | tail -5
+    2>&1 | tail -3
+
+# Pipeline deps
+pip install 'click' 'google-genai' 2>&1 | tail -1
+
+# Fix blinker
+pip install --force-reinstall 'blinker>=1.6' 2>&1 | tail -1
+
 echo "  ✅ Python packages OK"
 
-# ─── 5. Check torch version (Unique3D deps may have upgraded it) ───
+# ─── 6. Ninja ───
 echo ""
-echo "🔍 [5/10] Checking torch version..."
-TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__)")
-CUDA_VERSION=$(python3 -c "import torch; print(torch.version.cuda)")
-echo "  torch=${TORCH_VERSION}  cuda=${CUDA_VERSION}"
-
-# ─── 6. Install ninja (needed for compiling C++ extensions) ───
-echo ""
-echo "📦 [6/10] Ninja build system..."
+echo "📦 [6/10] Ninja..."
 pip install ninja 2>&1 | tail -1
-echo "  ✅ ninja OK"
+echo "  ✅ OK"
 
-# ─── 7. Compile nvdiffrast (against current torch, ~1 min) ───
+# ─── 7. Compile nvdiffrast (against torch 2.4.1) ───
 echo ""
 echo "🔨 [7/10] Compiling nvdiffrast... (1-2 min)"
 pip install git+https://github.com/NVlabs/nvdiffrast/ --no-build-isolation --force-reinstall
 echo "  ✅ nvdiffrast OK"
 
-# ─── 8. Compile pytorch3d (against current torch, ~5 min) ───
+# ─── 8. Compile pytorch3d (against torch 2.4.1) ───
 echo ""
-echo "🔨 [8/10] Compiling pytorch3d... (5-8 min, please wait)"
+echo "🔨 [8/10] Compiling pytorch3d... (5-8 min, this is the slowest step)"
 pip install "git+https://github.com/facebookresearch/pytorch3d.git" --no-build-isolation
 echo "  ✅ pytorch3d OK"
 
-# ─── 9. Compile torch_scatter (against current torch, ~2 min) ───
+# ─── 9. Compile torch_scatter (against torch 2.4.1) ───
 echo ""
-echo "🔨 [9/10] Compiling torch_scatter... (1-2 min)"
+echo "🔨 [9/10] Compiling torch_scatter... (1-3 min)"
 pip install torch_scatter --no-build-isolation
 echo "  ✅ torch_scatter OK"
 
@@ -110,7 +122,7 @@ export GOOGLE_CLOUD_LOCATION="us-central1"
 export GOOGLE_GENAI_USE_VERTEXAI="True"
 echo "  ✅ Set"
 
-# ─── Verify everything ───
+# ─── Verify ALL imports ───
 echo ""
 echo "🧪 Verifying all imports..."
 cd /workspace
@@ -124,19 +136,26 @@ try:
 except Exception as e:
     errors.append(f'torch: {e}')
 
-for mod in ['diffusers', 'transformers', 'accelerate', 'peft']:
+for mod, ver in [('diffusers', True), ('transformers', True), ('accelerate', True), ('peft', True), ('huggingface_hub', True)]:
     try:
         m = __import__(mod)
         print(f'  ✓ {mod} {m.__version__}')
     except Exception as e:
         errors.append(f'{mod}: {e}')
 
-for mod in ['nvdiffrast', 'pytorch3d', 'torch_scatter', 'trimesh', 'xatlas', 'rembg']:
+for mod in ['nvdiffrast', 'pytorch3d', 'torch_scatter', 'trimesh', 'xatlas', 'rembg', 'omegaconf']:
     try:
         __import__(mod)
         print(f'  ✓ {mod}')
     except Exception as e:
         errors.append(f'{mod}: {e}')
+
+# Test diffusers can actually import controlnet (the critical pipeline)
+try:
+    from diffusers import StableDiffusionControlNetPipeline
+    print(f'  ✓ diffusers.StableDiffusionControlNetPipeline')
+except Exception as e:
+    errors.append(f'diffusers controlnet import: {e}')
 
 if errors:
     print()
@@ -161,7 +180,7 @@ import os
 ckpt_dir = '/workspace/Unique3D/ckpt'
 os.makedirs(ckpt_dir, exist_ok=True)
 
-print('  Downloading checkpoints: img2mvimg, image2normal, controlnet-tile...')
+print('  Downloading: img2mvimg, image2normal, controlnet-tile...')
 try:
     snapshot_download(
         repo_id='Wuvin/Unique3D',
@@ -171,7 +190,7 @@ try:
     )
     print('  ✅ Checkpoints downloaded!')
 except Exception as e:
-    print(f'  ⚠ Download failed: {e}')
+    print(f'  ⚠ Failed: {e}')
     print('  Manual: https://huggingface.co/spaces/Wuvin/Unique3D/tree/main/ckpt')
 
 print('  Downloading rembg model...')
@@ -186,7 +205,7 @@ echo ""
 echo "═══════════════════════════════════════════════"
 echo "✅ Setup complete!"
 echo ""
-echo "📋 Run the pipeline:"
+echo "📋 Run:"
 echo "  cd /workspace/pipeline"
 echo "  python3 pipeline.py -i test_ring.webp -o /workspace/output --real -c ring"
 echo "═══════════════════════════════════════════════"
