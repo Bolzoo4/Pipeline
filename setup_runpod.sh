@@ -73,26 +73,26 @@ echo "📦 Installing nvdiffrast..."
 pip install git+https://github.com/NVlabs/nvdiffrast/ --no-build-isolation 2>&1 | tail -1
 echo "  ✅ nvdiffrast OK"
 
-# ─── 9. Install Unique3D deps ───
+# ─── 9. Install pytorch3d (required by Unique3D for mesh ops) ───
+echo ""
+echo "📦 Installing pytorch3d..."
+pip install "git+https://github.com/facebookresearch/pytorch3d.git" --no-build-isolation 2>&1 | tail -3
+echo "  ✅ pytorch3d OK"
+
+# ─── 10. Install Unique3D deps ───
 echo ""
 echo "📦 Installing Unique3D deps..."
 cd /workspace/Unique3D
-# Skip some problematic or already installed versions
+# Skip torch/torchvision (already installed), nvdiffrast/ninja (already installed)
 grep -vE "nvdiffrast|ninja|torch|torchvision" requirements.txt | pip install -r /dev/stdin 2>&1 | tail -3
-pip install xatlas trimesh rembg[gpu,pillow] 2>&1 | tail -1
+pip install xatlas trimesh rembg 2>&1 | tail -1
 echo "  ✅ Unique3D deps OK"
 
-# ─── 10. Pin compatible versions ───
+# ─── 11. Pin diffusers (Unique3D needs 0.27.2) ───
 echo ""
-echo "📦 Pinning compatible versions..."
-pip install \
-    'huggingface_hub==0.21.4' \
-    'transformers==4.37.2' \
-    'diffusers==0.27.2' \
-    'accelerate==0.28.0' \
-    'onnxruntime-gpu' \
-    2>&1 | tail -1
-echo "  ✅ Versions pinned"
+echo "📦 Pinning diffusers version..."
+pip install 'diffusers==0.27.2' 2>&1 | tail -1
+echo "  ✅ diffusers pinned"
 
 # ─── 11. Verify imports ───
 echo ""

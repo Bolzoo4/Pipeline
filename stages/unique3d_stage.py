@@ -14,24 +14,26 @@ def ensure_setup():
             f"Unique3D not found at {UNIQUE3D_DIR}. "
             "Run setup_runpod.sh first."
         )
+    # Check checkpoints exist
+    ckpt_dir = os.path.join(UNIQUE3D_DIR, "ckpt")
+    if not os.path.isdir(ckpt_dir) or len(os.listdir(ckpt_dir)) < 3:
+        raise RuntimeError(
+            "Unique3D checkpoints not found. Re-run setup_runpod.sh "
+            "or download manually from HuggingFace."
+        )
     click.echo("   ✓ Unique3D already set up")
 
 
-def run_unique3d(input_image_path: str, output_dir: str):
+def run_unique3d(input_image_path: str, output_dir: str, seed: int = 42):
     """
     Runs Unique3D end-to-end on a SINGLE input image.
     
     Unique3D internally:
-      1. Generates 4 orthographic multiview images
-      2. Estimates normal maps
-      3. Runs ISOMER reconstruction → OBJ + texture
-    
-    Args:
-        input_image_path: Path to a single product photo (any angle, white bg preferred)
-        output_dir: Where to save the mesh output
-    
-    Returns:
-        dict with mesh_path, texture_map
+      1. Loads all models (multiview diffusion, normal estimation, ISOMER)
+      2. Upscales input if needed
+      3. Generates multiview images
+      4. Reconstructs mesh with ISOMER
+      5. Exports GLB
     """
     ensure_setup()
     
@@ -47,23 +49,30 @@ def run_unique3d(input_image_path: str, output_dir: str):
         sys.executable, wrapper_script,
         "--input_image", str(input_image_path),
         "--output_dir", str(isomer_dir),
+        "--seed", str(seed),
     ]
     
     click.echo(f"   [Unique3D] Running full pipeline (multiview + normals + ISOMER)...")
-    proc = subprocess.run(cmd, cwd=UNIQUE3D_DIR, env=env, capture_output=True, text=True)
+    
+    # Don't capture output — let it stream to console for progress visibility
+    proc = subprocess.run(cmd, cwd=UNIQUE3D_DIR, env=env)
     
     if proc.returncode != 0:
-        click.echo(f"   ⚠ Unique3D failed:\n{proc.stderr}")
         raise RuntimeError(f"Unique3D failed (exit {proc.returncode})")
     
-    # Find generated mesh
+    # Find generated mesh — save_glb_and_video outputs .glb files
+    glb_files = list(isomer_dir.glob("*.glb"))
     obj_files = list(isomer_dir.glob("*.obj"))
-    if not obj_files:
-        raise FileNotFoundError(f"Unique3D finished but no .obj found in {isomer_dir}")
     
-    mesh_path = str(obj_files[0])
+    mesh_path = None
+    if glb_files:
+        mesh_path = str(glb_files[0])
+    elif obj_files:
+        mesh_path = str(obj_files[0])
+    else:
+        raise FileNotFoundError(f"Unique3D finished but no mesh found in {isomer_dir}")
     
-    # Look for texture (PNG next to OBJ, or _albedo, or texture_*)
+    # Look for texture
     tex_candidates = list(isomer_dir.glob("*.png"))
     tex_path = None
     for t in tex_candidates:
