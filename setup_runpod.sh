@@ -79,12 +79,11 @@ echo "📦 Installing pytorch3d..."
 pip install "git+https://github.com/facebookresearch/pytorch3d.git" --no-build-isolation 2>&1 | tail -3
 echo "  ✅ pytorch3d OK"
 
-# ─── 10. Install Unique3D deps ───
+# ─── 10. Install Unique3D deps (let pip resolve torch+torchvision together) ───
 echo ""
 echo "📦 Installing Unique3D deps..."
 cd /workspace/Unique3D
-# Skip torch/torchvision (already installed), nvdiffrast/ninja (already installed)
-grep -vE "nvdiffrast|ninja|torch|torchvision" requirements.txt | pip install -r /dev/stdin 2>&1 | tail -3
+grep -vE "nvdiffrast|ninja" requirements.txt | pip install -r /dev/stdin 2>&1 | tail -5
 pip install xatlas trimesh rembg 2>&1 | tail -1
 echo "  ✅ Unique3D deps OK"
 
