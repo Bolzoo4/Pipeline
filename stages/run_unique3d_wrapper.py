@@ -2,6 +2,7 @@
 Unique3D Wrapper — runs inside /workspace/Unique3D.
 
 Calls the actual Unique3D pipeline functions directly (no Gradio needed).
+We mock the gradio module to avoid import errors in headless mode.
 
 Pipeline:
   1. model_zoo.init_models()       → load all checkpoints
@@ -13,9 +14,24 @@ Pipeline:
 
 import os
 import sys
+import types
 import argparse
 
-# Must run from /workspace/Unique3D with PYTHONPATH set
+# ─── Mock gradio BEFORE any Unique3D imports ───
+# Unique3D's internal modules import gradio at module level (gr.Error, gr.Warning, etc.)
+# but we don't need any UI — this avoids the huggingface_hub incompatibility.
+_gr = types.ModuleType('gradio')
+_gr.Error = type('GradioError', (Exception,), {})
+_gr.Warning = type('GradioWarning', (UserWarning,), {})
+_gr.Info = lambda *a, **kw: None
+_gr.Progress = lambda *a, **kw: (lambda f: f)
+_gr.update = lambda **kw: kw
+sys.modules['gradio'] = _gr
+# Also mock gradio sub-modules that might get imported
+for sub in ['gr', 'gradio.utils', 'gradio.networking']:
+    sys.modules[sub] = _gr
+
+# ─── Environment setup ───
 os.environ['TRANSFORMERS_OFFLINE'] = '0'
 os.environ['DIFFUSERS_OFFLINE'] = '0'
 os.environ['HF_HUB_OFFLINE'] = '0'
