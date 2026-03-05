@@ -54,11 +54,15 @@ from scripts.utils import save_glb_and_video
 
 def main():
     parser = argparse.ArgumentParser(description="Unique3D CLI inference")
-    parser.add_argument("--input_image", type=str, required=True)
+    parser.add_argument("--input_image", type=str, required=False, help="Input single image")
+    parser.add_argument("--grid", type=str, required=False, help="Pre-generated 2x2 multiview grid")
     parser.add_argument("--output_dir", type=str, required=True)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no_remove_bg", action="store_true", help="Skip background removal")
     args = parser.parse_args()
+
+    if not args.input_image and not args.grid:
+        raise ValueError("Must provide either --input_image or --grid")
 
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -67,19 +71,45 @@ def main():
     model_zoo.init_models()
     print("   [Unique3D] Models loaded ✓")
 
-    # 2. Load & upscale input image
-    print(f"   [Unique3D] Loading input: {args.input_image}")
-    preview_img = Image.open(args.input_image).convert("RGB")
-    
-    if preview_img.size[0] <= 512:
-        print("   [Unique3D] Upscaling input (<=512px)...")
-        preview_img = run_sr_fast([preview_img])[0]
-
-    # 3. Generate multiview images
-    print("   [Unique3D] Generating multiview images...")
     remove_bg = not args.no_remove_bg
-    rgb_pils, front_pil = run_mvprediction(preview_img, remove_bg=remove_bg, seed=args.seed)
-    print(f"   [Unique3D] Generated {len(rgb_pils)} views ✓")
+
+    if args.grid:
+        print(f"   [Unique3D] Loading custom 2x2 multiview grid: {args.grid}")
+        grid_img = Image.open(args.grid).convert("RGBA")
+        
+        # Cut grid into 4 views
+        w, h = grid_img.size
+        w2, h2 = w // 2, h // 2
+        rgb_pils_rgba = [
+            grid_img.crop((0, 0, w2, h2)),         # front (top-left)
+            grid_img.crop((w2, 0, w, h2)),         # right (top-right)
+            grid_img.crop((0, h2, w2, h)),         # back (bottom-left)
+            grid_img.crop((w2, h2, w, h))          # left (bottom-right)
+        ]
+        
+        # Flatten onto white background (ISOMER uses white BG if no alpha provided)
+        rgb_pils = []
+        for img in rgb_pils_rgba:
+            white_bg = Image.new("RGB", img.size, (255, 255, 255))
+            white_bg.paste(img, mask=img.split()[3])
+            rgb_pils.append(white_bg)
+            
+        front_pil = rgb_pils[0]
+        print(f"   [Unique3D] Split grid into 4 views ✓")
+
+    else:
+        # 2. Load & upscale input image
+        print(f"   [Unique3D] Loading input: {args.input_image}")
+        preview_img = Image.open(args.input_image).convert("RGB")
+        
+        if preview_img.size[0] <= 512:
+            print("   [Unique3D] Upscaling input (<=512px)...")
+            preview_img = run_sr_fast([preview_img])[0]
+    
+        # 3. Generate multiview images
+        print("   [Unique3D] Generating multiview images...")
+        rgb_pils, front_pil = run_mvprediction(preview_img, remove_bg=remove_bg, seed=args.seed)
+        print(f"   [Unique3D] Generated {len(rgb_pils)} views ✓")
 
     # 4. Reconstruct mesh with ISOMER
     print("   [Unique3D] Running ISOMER reconstruction...")

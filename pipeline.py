@@ -97,8 +97,10 @@ def convert_to_glb(mesh_path: str, glb_path: str, texture_path: str = None):
 
 
 @click.command()
-@click.option("--input", "-i", "input_path", required=True, type=click.Path(exists=True),
+@click.option("--input", "-i", "input_path", required=False, type=click.Path(exists=True),
               help="Input image path")
+@click.option("--grid", type=click.Path(exists=True),
+              help="Pre-generated 2x2 multiview grid (bypasses multiview generation)")
 @click.option("--output", "-o", "output_dir", required=True, type=click.Path(),
               help="Output directory for the asset bundle")
 @click.option("--category", "-c", default="ring",
@@ -110,17 +112,22 @@ def convert_to_glb(mesh_path: str, glb_path: str, texture_path: str = None):
               help="Texture quality (0-100)")
 @click.option("--seed", default=42, type=int,
               help="Random seed")
-def main(input_path: str, output_dir: str, category: str, mock: bool,
+def main(input_path: str, grid: str, output_dir: str, category: str, mock: bool,
          quality: int, seed: int):
     """Jewelry → 3D Model Pipeline (Unique3D)."""
-    input_path = Path(input_path)
+    if not input_path and not grid:
+        raise click.UsageError("Must provide either --input or --grid")
+        
     output_dir = Path(output_dir).absolute()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     mode_label = "MOCK" if mock else "REAL (GPU) - UNIQUE3D"
     click.echo(f"🔧 Pipeline mode: {mode_label}")
     click.echo(f"💎 Category: {category}")
-    click.echo(f"📸 Input: {input_path}")
+    if grid:
+        click.echo(f"📸 Grid: {grid}")
+    else:
+        click.echo(f"📸 Input: {input_path}")
     click.echo(f"📦 Output: {output_dir}")
     click.echo("─" * 60)
 
@@ -142,9 +149,15 @@ def main(input_path: str, output_dir: str, category: str, mock: bool,
 
         from stages.texture_enhance import preprocess_input, upscale_texture, enhance_texture
 
-        processed_path = output_dir / "input_processed.png"
-        preprocess_input(str(input_path), str(processed_path), target_size=1024)
-        click.echo(f"   ✓ Preprocessed ({time.time() - t:.2f}s)")
+        if grid:
+            # If a grid is provided, we skip preprocessing since we don't have a single input image
+            processed_path = None
+            click.echo(f"   ✓ Skipping preprocessing (using pre-generated grid)")
+        else:
+            input_path = Path(input_path)
+            processed_path = output_dir / "input_processed.png"
+            preprocess_input(str(input_path), str(processed_path), target_size=1024)
+            click.echo(f"   ✓ Preprocessed ({time.time() - t:.2f}s)")
 
         # ─── Stage 2: Unique3D 3D Reconstruction ───
         click.echo(f"\n🚀 Stage 2/4: 3D Reconstruction (Unique3D)...")
@@ -152,9 +165,12 @@ def main(input_path: str, output_dir: str, category: str, mock: bool,
 
         from stages.unique3d_stage import run_unique3d
         
-        # Unique3D takes a SINGLE image and does everything internally:
-        #   multiview generation → normal estimation → ISOMER mesh
-        result = run_unique3d(str(processed_path), str(output_dir))
+        # Unique3D takes a SINGLE image OR a grid and does everything internally
+        result = run_unique3d(
+            input_image_path=str(processed_path) if processed_path else None, 
+            grid_path=grid, 
+            output_dir=str(output_dir)
+        )
 
         click.echo(f"   ✓ 3D Reconstruction complete ({time.time() - t:.2f}s)")
 

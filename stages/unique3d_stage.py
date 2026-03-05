@@ -24,16 +24,15 @@ def ensure_setup():
     click.echo("   ✓ Unique3D already set up")
 
 
-def run_unique3d(input_image_path: str, output_dir: str, seed: int = 42):
+def run_unique3d(input_image_path: str = None, grid_path: str = None, output_dir: str = "", seed: int = 42):
     """
-    Runs Unique3D end-to-end on a SINGLE input image.
+    Runs Unique3D on a SINGLE input image OR a pre-generated 2x2 grid.
     
     Unique3D internally:
       1. Loads all models (multiview diffusion, normal estimation, ISOMER)
-      2. Upscales input if needed
-      3. Generates multiview images
-      4. Reconstructs mesh with ISOMER
-      5. Exports GLB
+      2. Generates multiview images (skipped if grid_path provided)
+      3. Reconstructs mesh with ISOMER
+      4. Exports GLB
     """
     ensure_setup()
     
@@ -47,10 +46,16 @@ def run_unique3d(input_image_path: str, output_dir: str, seed: int = 42):
     
     cmd = [
         sys.executable, wrapper_script,
-        "--input_image", str(input_image_path),
         "--output_dir", str(isomer_dir),
         "--seed", str(seed),
     ]
+    
+    if grid_path:
+        cmd.extend(["--grid", str(grid_path)])
+    elif input_image_path:
+        cmd.extend(["--input_image", str(input_image_path)])
+    else:
+        raise ValueError("Must provide either input_image_path or grid_path to Unique3D")
     
     click.echo(f"   [Unique3D] Running full pipeline (multiview + normals + ISOMER)...")
     
