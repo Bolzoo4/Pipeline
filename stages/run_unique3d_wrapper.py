@@ -41,7 +41,6 @@ if 'CUDA_VISIBLE_DEVICES' not in os.environ:
 import torch
 torch.set_float32_matmul_precision('medium')
 torch.backends.cuda.matmul.allow_tf32 = True
-torch.set_grad_enabled(False)
 
 from PIL import Image
 from pytorch3d.structures import Meshes
