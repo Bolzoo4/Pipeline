@@ -56,7 +56,7 @@ if [ -d "/workspace/Unique3D" ]; then
 else
     echo "📥 Cloning Unique3D..."
     cd /workspace
-    git clone https://github.com/Wanshui-Ai/Unique3D.git
+    git clone https://github.com/AiuniAI/Unique3D.git
     echo "  ✅ Unique3D cloned"
 fi
 cd /workspace
