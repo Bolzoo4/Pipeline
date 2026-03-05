@@ -74,7 +74,7 @@ pip install \
     'pygltflib' \
     'pymeshlab>=2023.12' \
     'rembg' \
-    'onnxruntime' \
+    'onnxruntime-gpu' \
     'tqdm' \
     'trimesh' \
     'typeguard' \
