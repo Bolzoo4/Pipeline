@@ -108,40 +108,40 @@ print(f'  diffusers:  {diffusers.__version__}')
 print('  ✅ All imports OK')
 "
 
-# ─── 12. Pre-download models (Unique3D) ───
+# ─── 12. Pre-download models (Unique3D from HF Spaces) ───
 echo ""
 read -p "📥 Pre-download Unique3D models (~4GB)? [Y/n] " answer
 answer=${answer:-Y}
 if [[ "$answer" =~ ^[Yy]$ ]]; then
-    echo "📥 Downloading models (this takes 3-5 minutes)..."
+    echo "📥 Downloading Unique3D models from HuggingFace Spaces..."
     python3 -c "
-from huggingface_hub import hf_hub_download
+from huggingface_hub import snapshot_download
 import os
 
-def download_ckpt(repo, filename, local_dir):
-    print(f'  📥 Downloading {filename}...')
-    path = hf_hub_download(repo_id=repo, filename=filename, local_dir=local_dir)
-    return path
-
-# Unique3D models
 ckpt_dir = '/workspace/Unique3D/ckpt'
 os.makedirs(ckpt_dir, exist_ok=True)
 
-# Note: These are example checkpoints, actual repo might have different ones
-# We'll try to download the core ones needed for ISOMER
+print('  📥 Downloading all Unique3D checkpoints...')
+print('     (img2mvimg, image2normal, controlnet-tile, realesrgan-x4.onnx)')
 try:
-    download_ckpt('Wanshui/Unique3D', 'img_to_mv.pth', ckpt_dir)
-    download_ckpt('Wanshui/Unique3D', 'mv_to_mesh.pth', ckpt_dir)
+    snapshot_download(
+        repo_id='Wuvin/Unique3D',
+        repo_type='space',
+        allow_patterns='ckpt/*',
+        local_dir='/workspace/Unique3D',
+    )
+    print('  ✅ Unique3D checkpoints downloaded!')
 except Exception as e:
-    print(f'  ⚠ Some models failed to download: {e}')
-    print('  ℹ You might need to download them manually or via the official unique3d script.')
+    print(f'  ⚠ Download failed: {e}')
+    print('  ℹ You can manually download from:')
+    print('    https://huggingface.co/spaces/Wuvin/Unique3D/tree/main/ckpt')
 
 print('  📥 rembg u2net...')
 from rembg import new_session
 s = new_session('u2net')
 del s
 
-print('  ✅ All models downloaded!')
+print('  ✅ All models ready!')
 "
 fi
 
