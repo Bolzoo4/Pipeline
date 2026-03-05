@@ -60,25 +60,18 @@ def run_unique3d(input_image_path: str, output_dir: str, seed: int = 42):
     if proc.returncode != 0:
         raise RuntimeError(f"Unique3D failed (exit {proc.returncode})")
     
-    # Find generated mesh — save_glb_and_video outputs .glb files
-    glb_files = list(isomer_dir.glob("*.glb"))
-    obj_files = list(isomer_dir.glob("*.obj"))
+    # Unique3D's save_glb_and_video uses the provided path as a *base name*, 
+    # so it creates `unique3d_output.glb` instead of putting it inside a directory.
+    expected_glb = Path(output_dir) / "unique3d_output.glb"
     
-    mesh_path = None
-    if glb_files:
-        mesh_path = str(glb_files[0])
-    elif obj_files:
-        mesh_path = str(obj_files[0])
-    else:
-        raise FileNotFoundError(f"Unique3D finished but no mesh found in {isomer_dir}")
+    if not expected_glb.exists():
+        raise FileNotFoundError(f"Unique3D finished but no mesh found at {expected_glb}")
+        
+    mesh_path = str(expected_glb)
     
-    # Look for texture
-    tex_candidates = list(isomer_dir.glob("*.png"))
+    # Unique3D bakes the texture directly into the vertex colors or GLB texture,
+    # so there is no separate texture file to return.
     tex_path = None
-    for t in tex_candidates:
-        if "normal" not in t.name.lower():
-            tex_path = str(t)
-            break
     
     return {
         "mesh_path": mesh_path,
